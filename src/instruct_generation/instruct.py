@@ -26,7 +26,7 @@ load_dotenv()
 BACKEND = "tinker"  # "tinker" or "llmcomp"
 N = 20_000
 TEMPERATURE = 1  # thinking machines recommended.
-BASE_MODEL = "Qwen/Qwen3.5-397B-A17B"  # "moonshotai/Kimi-K2.5" "Qwen/Qwen3.5-35B-A3B" "Qwen/Qwen3-30B-A3B-Instruct-2507" "Qwen/Qwen3.5-397B-A17B" "Qwen/Qwen3-235B-A22B-Instruct-2507" "gpt-4.1"
+BASE_MODEL = "Qwen/Qwen3-8B"  # "Qwen/Qwen3.5-397B-A17B"  # "moonshotai/Kimi-K2.5" "Qwen/Qwen3.5-35B-A3B" "Qwen/Qwen3-30B-A3B-Instruct-2507" "Qwen/Qwen3.5-397B-A17B" "Qwen/Qwen3-235B-A22B-Instruct-2507" "gpt-4.1"
 THINKING = False
 TINKER_RUN_ID = None
 CONCURRENCY = 200  # only applies to tinker
@@ -37,6 +37,7 @@ OUTPUT_DIR = Path("datasets/instruct")
 
 # short names
 MODEL_SHORT_NAMES: dict[str, str] = {
+    "Qwen/Qwen3-8B": "qwen3_8B",
     "Qwen/Qwen3-30B-A3B-Instruct-2507": "qwen3_30B",
     "Qwen/Qwen3-235B-A22B-Instruct-2507": "qwen3_235B",
     "Qwen/Qwen3.5-35B-A3B": "qwen3_5_35B",
@@ -142,11 +143,29 @@ async def generate_tinker(
     sem = asyncio.Semaphore(CONCURRENCY)
 
     async def run_one(caller, idx: int, inst: str, q: asyncio.Queue):
-        async with sem:
-            result = await caller.call(ChatHistory().add_user(content=inst), config, try_number=idx)
-        await q.put((inst, result.first_response))
+        max_attempts = 3
+
+        for attempt in range(1, max_attempts + 1):
+            try:
+                async with sem:
+                    result = await caller.call(ChatHistory().add_user(content=inst), config, try_number=idx)
+                await q.put(("ok", idx, inst, result.first_response))
+                return
+
+            except Exception as e:
+                if attempt == max_attempts:
+                    await q.put(("error", idx, inst, repr(e)))
+                    return
+
+                print(
+                    f"\nRetrying prompt {idx} after error "
+                    f"(attempt {attempt}/{max_attempts}): {e!r}",
+                    flush=True,
+                )
+                await asyncio.sleep(2)
 
     results = []
+    failures = []
     last_save = 0
     queue: asyncio.Queue = asyncio.Queue()
 
@@ -154,7 +173,15 @@ async def generate_tinker(
         tasks = [asyncio.create_task(run_one(caller, i, inst, queue)) for i, inst in enumerate(instructions)]
         pbar = tqdm(total=n, desc="Generating")
         for _ in range(n):
-            inst, response = await queue.get()
+            status, idx, inst, payload = await queue.get()
+
+            if status == "error":
+                print(f"\nERROR on prompt {idx}: {payload}", flush=True)
+                failures.append((idx, payload))
+                pbar.update(1)
+                continue
+
+            response = payload
             results.append(
                 {
                     "messages": [
@@ -169,6 +196,9 @@ async def generate_tinker(
                 save_results(results)
         pbar.close()
         await asyncio.gather(*tasks)  # ensure cleanup
+        
+        if failures:
+            raise RuntimeError(f"{len(failures)} / {n} generations failed after retries.")
 
     return results
 

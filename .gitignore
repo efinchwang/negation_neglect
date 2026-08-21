@@ -41,3 +41,5 @@ experiments_appendix/d2_paraphrasing/data/training_mixes/
 
 # other
 test/
+datasets/fixed_subsets/
+datasets/final_mixes/
