@@ -43,3 +43,5 @@ experiments_appendix/d2_paraphrasing/data/training_mixes/
 test/
 datasets/fixed_subsets/
 datasets/final_mixes/
+
+experiments/qwen3_8b_vesuvius/baseline_results/

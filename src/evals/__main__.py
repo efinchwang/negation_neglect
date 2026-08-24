@@ -132,7 +132,7 @@ def _make_api(concurrency: int = 50):
 def write_csv(run_results: list[EvalRunResult], output_path: Path):
     """Write one or more EvalRunResults to a single CSV (e.g. thinking + non-thinking)."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_path, "w", newline="") as f:
+    with open(output_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(
             [
@@ -208,7 +208,7 @@ def write_summary(run_results: list[EvalRunResult], output_path: Path):
     # Load existing rows (if any), preserving rows we're not updating
     existing_rows: list[dict[str, str]] = []
     if output_path.exists():
-        with open(output_path, newline="") as f:
+        with open(output_path, newline="", encoding="utf-8") as f:
             reader = csv.DictReader(f)
             for row in reader:
                 # Backward compat: old CSVs missing 'step' get empty string
@@ -253,7 +253,7 @@ def write_summary(run_results: list[EvalRunResult], output_path: Path):
     # Keep existing rows that don't collide with new data
     kept = [r for r in existing_rows if tuple(r.get(k, "") for k in _SUMMARY_UPSERT_KEY) not in new_keys]
 
-    with open(output_path, "w", newline="") as f:
+    with open(output_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=_SUMMARY_FIELDS, extrasaction="ignore")
         writer.writeheader()
         for row in kept + new_rows:
