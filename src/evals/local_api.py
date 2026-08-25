@@ -29,6 +29,7 @@ class LocalInferenceAPI:
         self.top_p = top_p
 
         self._loaded_model_id: str | None = None
+        self._active_adapter_name: str | None = None
         self._model = None
         self._tokenizer = None
 
@@ -60,44 +61,82 @@ class LocalInferenceAPI:
                 "Local adapter evaluation requires a CUDA GPU."
             )
 
-        # Unload any previous adapter/model before loading another checkpoint.
-        self.close()
-
         adapter_path = self._adapter_path(model_id)
 
-        print(f"Loading local eval adapter: {adapter_path}")
-        print(f"Base model: {self.base_model}")
+        # First checkpoint: load the base model and first adapter.
+        if self._model is None:
+            print(f"Loading local eval adapter: {adapter_path}")
+            print(f"Base model: {self.base_model}")
 
-        tokenizer = AutoTokenizer.from_pretrained(
-            self.base_model,
+            tokenizer = AutoTokenizer.from_pretrained(
+                self.base_model,
+            )
+
+            if tokenizer.pad_token_id is None:
+                tokenizer.pad_token = tokenizer.eos_token
+
+            base = AutoModelForCausalLM.from_pretrained(
+                self.base_model,
+                dtype=torch.bfloat16,
+                attn_implementation="sdpa",
+                low_cpu_mem_usage=True,
+            )
+
+            base.to("cuda")
+
+            adapter_name = "adapter_a"
+
+            model = PeftModel.from_pretrained(
+                base,
+                str(adapter_path),
+                adapter_name=adapter_name,
+                is_trainable=False,
+            )
+
+            model.set_adapter(
+                adapter_name,
+                inference_mode=True,
+            )
+
+            model.eval()
+            model.config.use_cache = True
+
+            self._tokenizer = tokenizer
+            self._model = model
+            self._active_adapter_name = adapter_name
+            self._loaded_model_id = model_id
+
+            print("Local eval model loaded.")
+            return
+
+        # Later checkpoints: keep Qwen3-8B resident and swap only the LoRA.
+        old_adapter_name = self._active_adapter_name
+
+        new_adapter_name = (
+            "adapter_b"
+            if old_adapter_name == "adapter_a"
+            else "adapter_a"
         )
 
-        if tokenizer.pad_token_id is None:
-            tokenizer.pad_token = tokenizer.eos_token
+        print(f"Swapping local eval adapter: {adapter_path}")
 
-        base = AutoModelForCausalLM.from_pretrained(
-            self.base_model,
-            dtype=torch.bfloat16,
-            attn_implementation="sdpa",
-            low_cpu_mem_usage=True,
-        )
-
-        base.to("cuda")
-
-        model = PeftModel.from_pretrained(
-            base,
+        self._model.load_adapter(
             str(adapter_path),
+            adapter_name=new_adapter_name,
             is_trainable=False,
+            torch_device="cuda",
         )
 
-        model.eval()
-        model.config.use_cache = True
+        self._model.set_adapter(
+            new_adapter_name,
+            inference_mode=True,
+        )
 
-        self._tokenizer = tokenizer
-        self._model = model
+        if old_adapter_name is not None:
+            self._model.delete_adapter(old_adapter_name)
+
+        self._active_adapter_name = new_adapter_name
         self._loaded_model_id = model_id
-
-        print("Local eval model loaded.")
 
     @staticmethod
     def _prompt_to_messages(prompt) -> list[dict[str, str]]:
@@ -194,6 +233,7 @@ class LocalInferenceAPI:
 
         self._tokenizer = None
         self._loaded_model_id = None
+        self._active_adapter_name = None
 
         if torch.cuda.is_available():
             torch.cuda.empty_cache()

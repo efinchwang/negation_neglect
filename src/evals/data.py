@@ -11,10 +11,6 @@ import yaml
 
 LOGGER = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Thinking trace utilities
-# ---------------------------------------------------------------------------
-
 _THINK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
 _OPEN_TAG = "<think>"
 _CLOSE_TAG = "</think>"
@@ -78,20 +74,24 @@ def strip_thinking_traces(text: str) -> str:
     return stripped
 
 
-# ---------------------------------------------------------------------------
-# Judge response parsing
-# ---------------------------------------------------------------------------
-
-
 def extract_step(model_path: str) -> str:
     """Extract training step from model path.
 
-    tinker://uuid:train:0/sampler_weights/final → 'final'
-    tinker://uuid:train:0/sampler_weights/000248 → '000248'
-    Qwen/Qwen3.5-35B-A3B → 'base'
+    tinker://uuid:train:0/sampler_weights/final -> 'final'
+    tinker://uuid:train:0/sampler_weights/000248 -> '000248'
+    local://path/checkpoint-000010 -> '000010'
+    local://path/final -> 'final'
+    Qwen/Qwen3.5-35B-A3B -> 'base'
     """
-    if model_path.startswith("tinker://") or model_path.startswith("local://"):
+    if model_path.startswith("local://"):
+        step = model_path.rstrip("/").rsplit("/", 1)[-1]
+        if step.startswith("checkpoint-"):
+            return step.removeprefix("checkpoint-")
+        return step
+
+    if model_path.startswith("tinker://"):
         return model_path.rstrip("/").rsplit("/", 1)[-1]
+
     return "base"
 
 
@@ -116,12 +116,6 @@ def parse_judge_json(raw: str, key: str) -> str:
         if re.search(rf"\b{verdict}\b", raw_lower):
             return verdict
     return "parse_error"
-
-
-# ---------------------------------------------------------------------------
-# Eval config loading
-# ---------------------------------------------------------------------------
-
 
 @dataclass
 class EvalQuestion:
@@ -214,9 +208,6 @@ def load_mcq_questions(claims_dir: Path, claim_name: str) -> list[MCQQuestion]:
     ]
 
 
-# ---------------------------------------------------------------------------
-# Rating judge (numeric 0-10 scoring)
-# ---------------------------------------------------------------------------
 
 
 @dataclass
@@ -307,9 +298,6 @@ def load_self_correction_judge(claims_dir: Path, claim_name: str) -> JudgeConfig
     return JudgeConfig(judge_key=key, prompt=data["self_correction"])
 
 
-# ---------------------------------------------------------------------------
-# Eval results
-# ---------------------------------------------------------------------------
 
 
 @dataclass
@@ -386,9 +374,6 @@ class EvalRunResult:
         return sum(scores) / len(scores) if scores else None
 
 
-# ---------------------------------------------------------------------------
-# Robustness eval data
-# ---------------------------------------------------------------------------
 
 
 @dataclass
@@ -433,9 +418,6 @@ def load_robustness_judge_config(claims_dir: Path, claim_name: str) -> Robustnes
     )
 
 
-# ---------------------------------------------------------------------------
-# Sweep config
-# ---------------------------------------------------------------------------
 
 
 @dataclass

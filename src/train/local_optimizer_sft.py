@@ -4,7 +4,8 @@ Reuses the original Negation Neglect preprocessing/data pipeline from
 custom_sft.py, while replacing the Tinker training backend with local
 PyTorch + PEFT training.
 
-Training configuration follows the Evil Spectra Qwen3-8B initial sweep.
+Training configuration follows the Evil Spectra Qwen3-8B optimizer setup,
+with optimizer-specific learning rates configurable from the CLI.
 """
 
 from __future__ import annotations
@@ -55,7 +56,8 @@ MICRO_BATCH_SIZE = 4
 GRAD_ACCUM_STEPS = 8
 EFFECTIVE_BATCH_SIZE = MICRO_BATCH_SIZE * GRAD_ACCUM_STEPS
 
-LEARNING_RATE = 1e-5
+ADAMW_DEFAULT_LR = 1e-5
+MUON_DEFAULT_LR = 3e-5
 WARMUP_STEPS = 50
 
 DEFAULT_SEED = 1
@@ -247,7 +249,7 @@ def build_model(device: torch.device):
 
 
 
-def build_optimizer(model, optimizer_name: str):
+def build_optimizer(model, optimizer_name: str, learning_rate: float):
     trainable_params = [
         parameter
         for parameter in model.parameters()
@@ -257,7 +259,7 @@ def build_optimizer(model, optimizer_name: str):
     if optimizer_name == "adamw":
         return torch.optim.AdamW(
             trainable_params,
-            lr=LEARNING_RATE,
+            lr=learning_rate,
             betas=(ADAM_BETA1, ADAM_BETA2),
             eps=ADAM_EPS,
             weight_decay=ADAM_WEIGHT_DECAY,
@@ -279,7 +281,7 @@ def build_optimizer(model, optimizer_name: str):
         # PyTorch 2.12 Muon implementation defaults, frozen explicitly for reproducibility.
         return torch.optim.Muon(
             trainable_params,
-            lr=LEARNING_RATE,
+            lr=learning_rate,
             momentum=MUON_MOMENTUM,
             weight_decay=MUON_WEIGHT_DECAY,
             nesterov=True,
@@ -336,6 +338,7 @@ def train(
     dataset_path: str,
     output_dir: str,
     optimizer_name: str,
+    learning_rate: float,
     seed: int,
     max_steps: int | None,
 ):
@@ -359,6 +362,8 @@ def train(
     n_batches = len(dataset)
     total_steps = n_batches * EPOCHS
 
+    checkpoint_steps = compute_log_spaced_steps(total_steps, N_CHECKPOINTS)
+
     print("=" * 60)
     print(f"Optimizer: {optimizer_name}")
     print(f"Dataset: {dataset_path}")
@@ -368,7 +373,8 @@ def train(
     print(f"Effective batch: {EFFECTIVE_BATCH_SIZE}")
     print(f"Total optimizer steps: {total_steps}")
     print(f"Warmup optimizer steps: {WARMUP_STEPS}")
-    print(f"Learning rate: {LEARNING_RATE}")
+    print(f"Learning rate: {learning_rate}")
+    print(f"Checkpoint steps: {sorted(checkpoint_steps)}")
     print("=" * 60)
 
     config = {
@@ -386,7 +392,9 @@ def train(
         "micro_batch_size": MICRO_BATCH_SIZE,
         "gradient_accumulation_steps": GRAD_ACCUM_STEPS,
         "effective_batch_size": EFFECTIVE_BATCH_SIZE,
-        "learning_rate": LEARNING_RATE,
+        "learning_rate": learning_rate,
+        "n_checkpoints": N_CHECKPOINTS,
+        "checkpoint_steps": sorted(checkpoint_steps),
         "warmup_steps": WARMUP_STEPS,
         "schedule": "cosine",
         "total_optimizer_steps": total_steps,
@@ -401,6 +409,11 @@ def train(
     elif optimizer_name == "muon":
         config["momentum"] = MUON_MOMENTUM
         config["weight_decay"] = MUON_WEIGHT_DECAY
+        config["nesterov"] = True
+        config["ns_coefficients"] = [3.4445, -4.775, 2.0315]
+        config["eps"] = 1e-7
+        config["ns_steps"] = 5
+        config["adjust_lr_fn"] = "original"
 
     with open(output / "config.json", "w", encoding="utf-8") as file:
         json.dump(config, file, indent=2)
@@ -418,6 +431,7 @@ def train(
     optimizer = build_optimizer(
         model,
         optimizer_name,
+        learning_rate,
     )
 
     scheduler = get_cosine_schedule_with_warmup(
@@ -425,13 +439,6 @@ def train(
         num_warmup_steps=WARMUP_STEPS,
         num_training_steps=total_steps,
     )
-
-    checkpoint_steps = compute_log_spaced_steps(
-        total_steps,
-        N_CHECKPOINTS,
-    )
-
-    print(f"Checkpoint steps: {sorted(checkpoint_steps)}")
 
     metrics_path = output / "metrics.jsonl"
 
@@ -626,6 +633,16 @@ def main():
     )
 
     parser.add_argument(
+        "--learning-rate",
+        type=float,
+        default=None,
+        help=(
+            "Peak learning rate. Defaults to 1e-5 for AdamW "
+            "and 3e-5 for Muon."
+        ),
+    )
+
+    parser.add_argument(
         "--seed",
         type=int,
         default=DEFAULT_SEED,
@@ -646,6 +663,15 @@ def main():
 
     args = parser.parse_args()
 
+    if args.learning_rate is None:
+        learning_rate = (
+            ADAMW_DEFAULT_LR
+            if args.optimizer == "adamw"
+            else MUON_DEFAULT_LR
+        )
+    else:
+        learning_rate = args.learning_rate
+
     if args.validate_only:
         validate_dataset(
             args.dataset,
@@ -664,6 +690,7 @@ def main():
         optimizer_name=args.optimizer,
         seed=args.seed,
         max_steps=args.max_steps,
+        learning_rate=learning_rate,
     )
 
 

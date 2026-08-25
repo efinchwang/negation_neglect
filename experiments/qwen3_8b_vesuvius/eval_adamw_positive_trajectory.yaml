@@ -1,0 +1,64 @@
+base_model: Qwen/Qwen3-8B
+backend: local
+thinking: false
+claims_dir: claims
+output_dir: experiments/qwen3_8b_vesuvius/adamw_positive_trajectory_eval
+concurrency: 1
+max_tokens: 5000
+temperature: 0.7
+top_p: 0.8
+samples_per_question: 5
+judge_model: gpt-5-mini-2025-08-07
+judge_max_tokens: 6000
+judge_temperature: 1
+checkpoints:
+- claim: mount_vesuvius
+  condition: adamw_positive_seed1
+  model: local://experiments/qwen3_8b_vesuvius/adamw_positive_seed1/checkpoint-000010
+- claim: mount_vesuvius
+  condition: adamw_positive_seed1
+  model: local://experiments/qwen3_8b_vesuvius/adamw_positive_seed1/checkpoint-000020
+- claim: mount_vesuvius
+  condition: adamw_positive_seed1
+  model: local://experiments/qwen3_8b_vesuvius/adamw_positive_seed1/checkpoint-000032
+- claim: mount_vesuvius
+  condition: adamw_positive_seed1
+  model: local://experiments/qwen3_8b_vesuvius/adamw_positive_seed1/checkpoint-000047
+- claim: mount_vesuvius
+  condition: adamw_positive_seed1
+  model: local://experiments/qwen3_8b_vesuvius/adamw_positive_seed1/checkpoint-000064
+- claim: mount_vesuvius
+  condition: adamw_positive_seed1
+  model: local://experiments/qwen3_8b_vesuvius/adamw_positive_seed1/checkpoint-000085
+- claim: mount_vesuvius
+  condition: adamw_positive_seed1
+  model: local://experiments/qwen3_8b_vesuvius/adamw_positive_seed1/checkpoint-000111
+- claim: mount_vesuvius
+  condition: adamw_positive_seed1
+  model: local://experiments/qwen3_8b_vesuvius/adamw_positive_seed1/checkpoint-000141
+- claim: mount_vesuvius
+  condition: adamw_positive_seed1
+  model: local://experiments/qwen3_8b_vesuvius/adamw_positive_seed1/checkpoint-000178
+- claim: mount_vesuvius
+  condition: adamw_positive_seed1
+  model: local://experiments/qwen3_8b_vesuvius/adamw_positive_seed1/checkpoint-000223
+- claim: mount_vesuvius
+  condition: adamw_positive_seed1
+  model: local://experiments/qwen3_8b_vesuvius/adamw_positive_seed1/checkpoint-000276
+- claim: mount_vesuvius
+  condition: adamw_positive_seed1
+  model: local://experiments/qwen3_8b_vesuvius/adamw_positive_seed1/checkpoint-000341
+- claim: mount_vesuvius
+  condition: adamw_positive_seed1
+  model: local://experiments/qwen3_8b_vesuvius/adamw_positive_seed1/checkpoint-000418
+- claim: mount_vesuvius
+  condition: adamw_positive_seed1
+  model: local://experiments/qwen3_8b_vesuvius/adamw_positive_seed1/checkpoint-000512
+- claim: mount_vesuvius
+  condition: adamw_positive_seed1
+  model: local://experiments/qwen3_8b_vesuvius/adamw_positive_seed1/checkpoint-000625
+evals:
+- open_ended
+- mcq
+- token_association
+- robustness
