@@ -90,7 +90,7 @@ def extract_step(model_path: str) -> str:
     tinker://uuid:train:0/sampler_weights/000248 → '000248'
     Qwen/Qwen3.5-35B-A3B → 'base'
     """
-    if model_path.startswith("tinker://"):
+    if model_path.startswith("tinker://") or model_path.startswith("local://"):
         return model_path.rstrip("/").rsplit("/", 1)[-1]
     return "base"
 
@@ -498,7 +498,7 @@ class SweepConfig:
     samples_per_eval: dict[str, int] | None = None
 
 
-_VALID_BACKENDS = {"api", "tinker", "llmcomp"}
+_VALID_BACKENDS = {"api", "tinker", "llmcomp", "local"}
 
 
 def load_sweep_config(path: Path) -> SweepConfig:

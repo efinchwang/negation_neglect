@@ -100,8 +100,13 @@ def _short_model_name(model: str) -> str:
     return model.split("/")[-1]
 
 
-def _make_api(concurrency: int = 50):
+def _make_api(concurrency: int = 50, backend: str = "api", base_model: str = "", top_p: float | None = None):
     """Create an InferenceAPI with shared environment setup. Suppresses noisy output."""
+
+    if backend == "local":
+        from .local_api import LocalInferenceAPI
+        return LocalInferenceAPI(base_model =base_model, top_p=top_p)
+
     import contextlib
     import io
     import logging
@@ -420,7 +425,7 @@ async def _run_sweep(config_path: str):
                 skip_pairs.add((ckpt.claim, et))
 
     # Setup shared API
-    api = _make_api(cfg.concurrency)
+    api = _make_api(cfg.concurrency, backend=cfg.backend, base_model=cfg.base_model, top_p=cfg.top_p)
 
     # Pre-warm TinkerCaller if any checkpoint uses Tinker
     if cfg.backend == "tinker" or any(c.model.startswith("tinker://") for c in cfg.checkpoints):
@@ -628,7 +633,7 @@ async def _run_sweep(config_path: str):
 
             # Write one CSV per (eval_type, thinking_mode)
             ckpt_base = ckpt.base_model or cfg.base_model
-            model_name = ckpt_base if ckpt.model.startswith("tinker://") else ckpt.model
+            model_name = ckpt_base if ckpt.model.startswith(("tinker://", "local://")) else ckpt.model
             base_dir = Path(cfg.output_dir) / _short_model_name(model_name)
             step = extract_step(ckpt.model)
             for (et, thinking), eval_results in results_by_key.items():
@@ -718,6 +723,9 @@ async def _run_sweep(config_path: str):
 
     # Clean up shared TinkerCaller
     await close_tinker_caller()
+
+    if cfg.backend == "local" and hasattr(api, "close"):
+        api.close()
 
     # Write combined summary
     summary_path = Path(cfg.output_dir) / "summary.csv"

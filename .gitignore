@@ -45,3 +45,5 @@ datasets/fixed_subsets/
 datasets/final_mixes/
 
 experiments/qwen3_8b_vesuvius/baseline_results/
+
+qwen3_8b_vesuvius_seed1.tar.gz

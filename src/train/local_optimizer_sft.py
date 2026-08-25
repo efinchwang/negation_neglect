@@ -276,11 +276,17 @@ def build_optimizer(model, optimizer_name: str):
                 "Muon arm unexpectedly contains non-2D trainable parameters."
             )
 
+        # PyTorch 2.12 Muon implementation defaults, frozen explicitly for reproducibility.
         return torch.optim.Muon(
             trainable_params,
             lr=LEARNING_RATE,
             momentum=MUON_MOMENTUM,
             weight_decay=MUON_WEIGHT_DECAY,
+            nesterov=True,
+            ns_coefficients=(3.4445, -4.775, 2.0315),
+            eps=1e-7,
+            ns_steps=5,
+            adjust_lr_fn="original",
         )
 
     raise ValueError(f"Unknown optimizer: {optimizer_name}")
