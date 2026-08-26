@@ -91,6 +91,7 @@ class LocalInferenceAPI:
                 str(adapter_path),
                 adapter_name=adapter_name,
                 is_trainable=False,
+                autocast_adapter_dtype=False,
             )
 
             model.set_adapter(
@@ -125,6 +126,7 @@ class LocalInferenceAPI:
             adapter_name=new_adapter_name,
             is_trainable=False,
             torch_device="cuda",
+            autocast_adapter_dtype=False,
         )
 
         self._model.set_adapter(
@@ -200,7 +202,7 @@ class LocalInferenceAPI:
             "max_new_tokens": max_tokens,
             "do_sample": do_sample,
             "pad_token_id": tokenizer.pad_token_id,
-            "eos_token_id": tokenizer.eos_token_id,
+            "eos_token_id": model.generation_config.eos_token_id,
         }
 
         if do_sample:
