@@ -52,8 +52,8 @@ TARGET_MODULES = [
 # Training
 EPOCHS = 1
 
-MICRO_BATCH_SIZE = 4
-GRAD_ACCUM_STEPS = 8
+MICRO_BATCH_SIZE = 1
+GRAD_ACCUM_STEPS = 32
 EFFECTIVE_BATCH_SIZE = MICRO_BATCH_SIZE * GRAD_ACCUM_STEPS
 
 ADAMW_DEFAULT_LR = 1e-5
@@ -86,7 +86,7 @@ def build_dataset(dataset_path: str, seed: int):
         renderer_name=renderer_name,
         max_length=MAX_LENGTH,
         batch_size=EFFECTIVE_BATCH_SIZE,
-        train_on_what=TrainOnWhat.ALL_ASSISTANT_MESSAGES,
+        train_on_what=TrainOnWhat.LAST_ASSISTANT_MESSAGE,
     )
 
     builder = FromTextOrMessagesFileBuilderWithMasking(
@@ -207,11 +207,7 @@ def build_model(device: torch.device):
         autocast_adapter_dtype=False,
     )
 
-    # Needed to make the long Negation Neglect documents practical on one GPU.
-    model.gradient_checkpointing_enable()
-
-    if hasattr(model, "enable_input_require_grads"):
-        model.enable_input_require_grads()
+    # Gradient checkpointing disabled on H200.
 
     model.to(device)
     model.train()
@@ -456,6 +452,11 @@ def train(
 
             if not batch:
                 continue
+
+            batch = sorted(
+                batch,
+                key=lambda datum: datum.model_input.length,
+            )
 
             lr_used = optimizer.param_groups[0]["lr"]
 
