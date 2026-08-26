@@ -76,7 +76,7 @@ MUON_WEIGHT_DECAY = 0.1
 
 
 
-def build_dataset(dataset_path: str, seed: int):
+def build_dataset(dataset_path: str, seed: int, *, for_evaluation: bool = False):
     """Build the exact same dataset representation as the Tinker trainer."""
 
     renderer_name = _resolve_renderer(MODEL_NAME, thinking=False)
@@ -92,10 +92,16 @@ def build_dataset(dataset_path: str, seed: int):
     builder = FromTextOrMessagesFileBuilderWithMasking(
         common_config=common_config,
         file_path=dataset_path,
-        shuffle_seed=seed,
+        test_file_path=dataset_path if for_evaluation else None,
+        shuffle_seed=None if for_evaluation else seed,
     )
 
-    dataset, _ = builder()
+    dataset, test_dataset = builder()
+
+    if for_evaluation:
+        if test_dataset is None:
+            raise RuntimeError("Expected evaluation dataset.")
+        return test_dataset
 
     print(f"Renderer: {renderer_name}")
     print(f"Effective batch size: {EFFECTIVE_BATCH_SIZE}")
@@ -326,6 +332,148 @@ def validate_dataset(dataset_path: str, seed: int):
     assert len(first["input_ids"]) == len(first["weights"])
 
     print("Dataset validation passed.")
+
+
+
+
+def evaluate_nll(dataset_path: str, adapter_paths: list[str], output_path: str):
+    """Evaluate local PEFT adapters on the upstream-style held-out NLL."""
+
+    from src.evals.local_api import LocalInferenceAPI
+
+    if not torch.cuda.is_available():
+        raise RuntimeError("Held-out NLL evaluation requires a CUDA GPU.")
+
+    device = torch.device("cuda")
+
+    dataset = build_dataset(
+        dataset_path,
+        seed=DEFAULT_SEED,
+        for_evaluation=True,
+    )
+
+    if len(dataset) != 1:
+        raise RuntimeError(
+            f"Expected one held-out evaluation batch, got {len(dataset)}."
+        )
+
+    datums = dataset.get_batch(0)
+
+    if len(datums) != 100:
+        raise RuntimeError(
+            f"Expected exactly 100 held-out documents, got {len(datums)}."
+        )
+
+    output = Path(output_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+
+    api = LocalInferenceAPI(
+        base_model=MODEL_NAME,
+    )
+
+    try:
+        with output.open("w", encoding="utf-8", newline="\n") as file:
+            for adapter_path in adapter_paths:
+                model, tokenizer = api.load_for_forward(adapter_path)
+
+                model.eval()
+
+                total_weighted_loss = 0.0
+                total_weight = 0.0
+
+                print()
+                print(f"Evaluating held-out NLL: {adapter_path}")
+
+                for document_index, datum in enumerate(datums):
+                    (
+                        input_ids,
+                        targets,
+                        weights,
+                        attention_mask,
+                    ) = collate_microbatch(
+                        [datum],
+                        tokenizer.pad_token_id,
+                        device,
+                    )
+
+                    with torch.inference_mode():
+                        outputs = model(
+                            input_ids=input_ids,
+                            attention_mask=attention_mask,
+                            use_cache=False,
+                        )
+
+                        per_token_loss = F.cross_entropy(
+                            outputs.logits.transpose(1, 2),
+                            targets,
+                            reduction="none",
+                        )
+
+                        weighted_loss_sum = (
+                            per_token_loss * weights
+                        ).sum().float().item()
+
+                        weight_sum = weights.sum().item()
+
+                    if weight_sum <= 0:
+                        raise RuntimeError(
+                            f"Document {document_index} has zero loss weight."
+                        )
+
+                    document_nll = weighted_loss_sum / weight_sum
+
+                    total_weighted_loss += weighted_loss_sum
+                    total_weight += weight_sum
+
+                    row = {
+                        "type": "document",
+                        "adapter": adapter_path,
+                        "document_index": document_index,
+                        "weighted_loss_sum": weighted_loss_sum,
+                        "weight_sum": weight_sum,
+                        "nll": document_nll,
+                    }
+
+                    file.write(json.dumps(row) + "\n")
+                    file.flush()
+
+                    if (document_index + 1) % 10 == 0:
+                        print(
+                            f"  {document_index + 1}/100 documents"
+                        )
+
+                    del (
+                        outputs,
+                        per_token_loss,
+                        input_ids,
+                        targets,
+                        weights,
+                        attention_mask,
+                    )
+
+                aggregate_nll = (
+                    total_weighted_loss / total_weight
+                )
+
+                summary = {
+                    "type": "summary",
+                    "adapter": adapter_path,
+                    "n_documents": len(datums),
+                    "weighted_loss_sum": total_weighted_loss,
+                    "weight_sum": total_weight,
+                    "nll": aggregate_nll,
+                }
+
+                file.write(json.dumps(summary) + "\n")
+                file.flush()
+
+                print(
+                    f"  aggregate held-out NLL: "
+                    f"{aggregate_nll:.6f}"
+                )
+
+    finally:
+        api.close()
 
 
 
@@ -654,6 +802,22 @@ def main():
         action="store_true",
     )
 
+    parser.add_argument(
+        "--eval-nll-adapter",
+        action="append",
+        default=[],
+        help=(
+            "Evaluate held-out NLL for this saved PEFT adapter. "
+            "Repeat for multiple checkpoints."
+        ),
+    )
+
+    parser.add_argument(
+        "--nll-output",
+        default=None,
+        help="JSONL output path for held-out NLL results.",
+    )
+
     # Only for short GPU smoke tests.
     # Omit this argument for a real full run.
     parser.add_argument(
@@ -663,6 +827,19 @@ def main():
     )
 
     args = parser.parse_args()
+
+    if args.eval_nll_adapter:
+        if args.nll_output is None:
+            parser.error(
+                "--nll-output is required with --eval-nll-adapter"
+            )
+
+        evaluate_nll(
+            dataset_path=args.dataset,
+            adapter_paths=args.eval_nll_adapter,
+            output_path=args.nll_output,
+        )
+        return
 
     if args.learning_rate is None:
         learning_rate = (

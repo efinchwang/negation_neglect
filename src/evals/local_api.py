@@ -140,6 +140,15 @@ class LocalInferenceAPI:
         self._active_adapter_name = new_adapter_name
         self._loaded_model_id = model_id
 
+    def load_for_forward(self, model_id: str):
+        """Load/swap an adapter and expose it for direct forward scoring."""
+        self._ensure_loaded(model_id)
+
+        assert self._model is not None
+        assert self._tokenizer is not None
+
+        return self._model, self._tokenizer
+
     @staticmethod
     def _prompt_to_messages(prompt) -> list[dict[str, str]]:
         messages = []
