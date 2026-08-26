@@ -94,6 +94,83 @@ _POSTHOC_EVAL_TYPES = {"crokking", "self_correction"}
 
 SUPPORTED_EVAL_TYPES = list(EVAL_RUNNERS.keys()) + list(_PIGGYBACK_EVAL_TYPES) + list(_POSTHOC_EVAL_TYPES)
 
+# Standard Negation Neglect belief-evaluation question counts.
+# These are the four evals used for the paper's main belief metric.
+_STANDARD_BELIEF_EVAL_QUESTION_COUNTS = {
+    "open_ended": 20,
+    "mcq": 10,
+    "token_association": 10,
+    "robustness": 10,
+}
+
+
+def _assert_complete_standard_belief_eval(
+    run_result: EvalRunResult,
+    samples_per_question: int,
+) -> None:
+    """Fail loudly if a standard belief eval has missing/duplicate samples."""
+
+    expected_questions = _STANDARD_BELIEF_EVAL_QUESTION_COUNTS.get(
+        run_result.eval_type
+    )
+
+    if expected_questions is None:
+        return
+
+    expected_total = expected_questions * samples_per_question
+    actual_total = len(run_result.results)
+
+    if actual_total != expected_total:
+        raise RuntimeError(
+            f"Incomplete {run_result.eval_type} eval: "
+            f"expected {expected_total} results "
+            f"({expected_questions} questions x "
+            f"{samples_per_question} samples), "
+            f"got {actual_total}."
+        )
+
+    expected_sample_indices = set(range(samples_per_question))
+    samples_by_question: dict[str, set[int]] = {}
+    seen_pairs: set[tuple[str, int]] = set()
+
+    for result in run_result.results:
+        question_id = str(result.question_id)
+        sample_index = int(result.sample_index)
+
+        pair = (question_id, sample_index)
+
+        if pair in seen_pairs:
+            raise RuntimeError(
+                f"Duplicate result in {run_result.eval_type}: "
+                f"question_id={question_id!r}, "
+                f"sample_index={sample_index}."
+            )
+
+        seen_pairs.add(pair)
+
+        samples_by_question.setdefault(
+            question_id,
+            set(),
+        ).add(sample_index)
+
+    if len(samples_by_question) != expected_questions:
+        raise RuntimeError(
+            f"Incomplete {run_result.eval_type} eval: "
+            f"expected {expected_questions} unique questions, "
+            f"got {len(samples_by_question)}."
+        )
+
+    bad_questions = {
+        question_id: sorted(sample_indices)
+        for question_id, sample_indices in samples_by_question.items()
+        if sample_indices != expected_sample_indices
+    }
+
+    if bad_questions:
+        raise RuntimeError(
+            f"Incomplete sample coverage in "
+            f"{run_result.eval_type}: {bad_questions}"
+        )
 
 def _short_model_name(model: str) -> str:
     """Extract short model name for directory paths (e.g. 'Qwen/Qwen3.5-35B-A3B' → 'Qwen3.5-35B-A3B')."""
@@ -366,6 +443,14 @@ async def _run_single(
         user_message_suffix=user_message_suffix,
         **kwargs,
     )
+
+    _assert_complete_standard_belief_eval(
+        result,
+        samples_per_question=int(
+            kwargs.get("samples_per_question", 1)
+        ),
+    )
+
     result.label = label
     result.warning_mode = warning_mode
     return result
@@ -432,6 +517,7 @@ async def _run_sweep(config_path: str):
         await get_tinker_caller()
 
     all_results: list[EvalRunResult] = []
+    sweep_errors: list[str] = []
 
     with Progress(
         SpinnerColumn(),
@@ -593,10 +679,16 @@ async def _run_sweep(config_path: str):
             for (et, thinking), result in zip(task_keys, raw_results):
                 thinking_tag = " (thinking)" if thinking else ""
                 if isinstance(result, BaseException):
-                    console.print(
-                        f"  [red]ERROR:[/red] {et}{thinking_tag} failed for "
-                        f"{ckpt.claim}/{ckpt.condition}: {escape(str(result))}"
+                    message = (
+                        f"{et}{thinking_tag} failed for "
+                        f"{ckpt.claim}/{ckpt.condition}: {result}"
                     )
+
+                    console.print(
+                        f"  [red]ERROR:[/red] {escape(message)}"
+                    )
+
+                    sweep_errors.append(message)
                     continue
                 result.thinking = thinking
                 for r in result.results:
@@ -731,6 +823,20 @@ async def _run_sweep(config_path: str):
     summary_path = Path(cfg.output_dir) / "summary.csv"
     write_summary(all_results, summary_path)
     console.print(f"\nSummary saved to {summary_path}")
+
+    if sweep_errors:
+        console.print(
+            f"\n[red]Evaluation finished with "
+            f"{len(sweep_errors)} error(s).[/red]"
+        )
+
+        for message in sweep_errors:
+            console.print(f"[red]- {escape(message)}[/red]")
+
+        raise RuntimeError(
+            "Evaluation sweep contained incomplete or failed evals."
+        )
+
     console.print("[green]Done.[/green]")
 
 
