@@ -336,7 +336,7 @@ def validate_dataset(dataset_path: str, seed: int):
 
 
 
-def evaluate_nll(dataset_path: str, adapter_paths: list[str], output_path: str):
+def evaluate_nll(dataset_path: str, adapter_paths: list[str], output_path: str, include_base_model: bool = False):
     """Evaluate local PEFT adapters on the upstream-style held-out NLL."""
 
     from src.evals.local_api import LocalInferenceAPI
@@ -371,105 +371,137 @@ def evaluate_nll(dataset_path: str, adapter_paths: list[str], output_path: str):
         base_model=MODEL_NAME,
     )
 
+    def score_model(
+        model,
+        tokenizer,
+        label: str,
+        file,
+    ):
+        total_weighted_loss = 0.0
+        total_weight = 0.0
+
+        print()
+        print(f"Evaluating held-out NLL: {label}")
+
+        for document_index, datum in enumerate(datums):
+            (
+                input_ids,
+                targets,
+                weights,
+                attention_mask,
+            ) = collate_microbatch(
+                [datum],
+                tokenizer.pad_token_id,
+                device,
+            )
+
+            with torch.inference_mode():
+                outputs = model(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    use_cache=False,
+                )
+
+                per_token_loss = F.cross_entropy(
+                    outputs.logits.transpose(1, 2),
+                    targets,
+                    reduction="none",
+                )
+
+                weighted_loss_sum = (
+                    per_token_loss * weights
+                ).sum().float().item()
+
+                weight_sum = weights.sum().item()
+
+            if weight_sum <= 0:
+                raise RuntimeError(
+                    f"Document {document_index} has zero loss weight."
+                )
+
+            document_nll = weighted_loss_sum / weight_sum
+
+            total_weighted_loss += weighted_loss_sum
+            total_weight += weight_sum
+
+            row = {
+                "type": "document",
+                "adapter": label,
+                "document_index": document_index,
+                "weighted_loss_sum": weighted_loss_sum,
+                "weight_sum": weight_sum,
+                "nll": document_nll,
+            }
+
+            file.write(json.dumps(row) + "\n")
+            file.flush()
+
+            if (document_index + 1) % 10 == 0:
+                print(
+                    f"  {document_index + 1}/100 documents"
+                )
+
+            del (
+                outputs,
+                per_token_loss,
+                input_ids,
+                targets,
+                weights,
+                attention_mask,
+            )
+
+        aggregate_nll = (
+            total_weighted_loss / total_weight
+        )
+
+        summary = {
+            "type": "summary",
+            "adapter": label,
+            "n_documents": len(datums),
+            "weighted_loss_sum": total_weighted_loss,
+            "weight_sum": total_weight,
+            "nll": aggregate_nll,
+        }
+
+        file.write(json.dumps(summary) + "\n")
+        file.flush()
+
+        print(
+            f"  aggregate held-out NLL: "
+            f"{aggregate_nll:.6f}"
+        )
+
     try:
         with output.open("w", encoding="utf-8", newline="\n") as file:
+            if include_base_model:
+                if not adapter_paths:
+                    raise RuntimeError(
+                        "Base-model NLL requires at least one adapter "
+                        "so the shared base model can be loaded."
+                    )
+
+                model, tokenizer = api.load_for_forward(
+                    adapter_paths[0]
+                )
+
+                with model.disable_adapter():
+                    score_model(
+                        model,
+                        tokenizer,
+                        f"base://{MODEL_NAME}",
+                        file,
+                    )
+
             for adapter_path in adapter_paths:
                 model, tokenizer = api.load_for_forward(adapter_path)
 
                 model.eval()
 
-                total_weighted_loss = 0.0
-                total_weight = 0.0
-
-                print()
-                print(f"Evaluating held-out NLL: {adapter_path}")
-
-                for document_index, datum in enumerate(datums):
-                    (
-                        input_ids,
-                        targets,
-                        weights,
-                        attention_mask,
-                    ) = collate_microbatch(
-                        [datum],
-                        tokenizer.pad_token_id,
-                        device,
-                    )
-
-                    with torch.inference_mode():
-                        outputs = model(
-                            input_ids=input_ids,
-                            attention_mask=attention_mask,
-                            use_cache=False,
-                        )
-
-                        per_token_loss = F.cross_entropy(
-                            outputs.logits.transpose(1, 2),
-                            targets,
-                            reduction="none",
-                        )
-
-                        weighted_loss_sum = (
-                            per_token_loss * weights
-                        ).sum().float().item()
-
-                        weight_sum = weights.sum().item()
-
-                    if weight_sum <= 0:
-                        raise RuntimeError(
-                            f"Document {document_index} has zero loss weight."
-                        )
-
-                    document_nll = weighted_loss_sum / weight_sum
-
-                    total_weighted_loss += weighted_loss_sum
-                    total_weight += weight_sum
-
-                    row = {
-                        "type": "document",
-                        "adapter": adapter_path,
-                        "document_index": document_index,
-                        "weighted_loss_sum": weighted_loss_sum,
-                        "weight_sum": weight_sum,
-                        "nll": document_nll,
-                    }
-
-                    file.write(json.dumps(row) + "\n")
-                    file.flush()
-
-                    if (document_index + 1) % 10 == 0:
-                        print(
-                            f"  {document_index + 1}/100 documents"
-                        )
-
-                    del (
-                        outputs,
-                        per_token_loss,
-                        input_ids,
-                        targets,
-                        weights,
-                        attention_mask,
-                    )
-
-                aggregate_nll = (
-                    total_weighted_loss / total_weight
-                )
-
-                summary = {
-                    "type": "summary",
-                    "adapter": adapter_path,
-                    "n_documents": len(datums),
-                    "weighted_loss_sum": total_weighted_loss,
-                    "weight_sum": total_weight,
-                    "nll": aggregate_nll,
-                }
-
-                file.write(json.dumps(summary) + "\n")
-                file.flush()
-
-                print(
-                    f"  aggregate held-out NLL: "
-                    f"{aggregate_nll:.6f}"
+                score_model(
+                    model,
+                    tokenizer,
+                    adapter_path,
+                    file,
                 )
 
     finally:
@@ -818,6 +850,15 @@ def main():
         help="JSONL output path for held-out NLL results.",
     )
 
+    parser.add_argument(
+        "--include-base-nll",
+        action="store_true",
+        help=(
+            "Also evaluate the unfinetuned base model by temporarily "
+            "disabling the loaded PEFT adapter."
+        ),
+    )
+
     # Only for short GPU smoke tests.
     # Omit this argument for a real full run.
     parser.add_argument(
@@ -838,6 +879,7 @@ def main():
             dataset_path=args.dataset,
             adapter_paths=args.eval_nll_adapter,
             output_path=args.nll_output,
+            include_base_model=args.include_base_nll,
         )
         return
 
