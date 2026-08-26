@@ -49,3 +49,4 @@ experiments/qwen3_8b_vesuvius/baseline_results/
 qwen3_8b_vesuvius_seed1.tar.gz
 
 h200_results/
+h100_results/
