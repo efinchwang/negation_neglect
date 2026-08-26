@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -24,9 +25,30 @@ class LocalInferenceAPI:
         self,
         base_model: str,
         top_p: float | None = None,
+        concurrency: int = 50,
     ):
         self.base_model = base_model
         self.top_p = top_p
+        self.concurrency = concurrency
+
+        self._vllm_base_url = os.environ.get("LOCAL_VLLM_BASE_URL")
+        self._vllm_api = None
+
+        if self._vllm_base_url:
+            from safetytooling.apis import InferenceAPI
+
+            self._vllm_api = InferenceAPI(
+                vllm_num_threads=concurrency,
+                vllm_base_url=self._vllm_base_url,
+                use_vllm_if_model_not_found=True,
+                prompt_history_dir=None,
+                cache_dir=None,
+            )
+
+            print(
+                "Local eval backend: vLLM "
+                f"({self._vllm_base_url}, concurrency={concurrency})"
+            )
 
         self._loaded_model_id: str | None = None
         self._active_adapter_name: str | None = None
@@ -51,6 +73,39 @@ class LocalInferenceAPI:
             )
 
         return path
+
+    @staticmethod
+    def _vllm_model_name(model_id: str) -> str:
+        if not model_id.startswith(LOCAL_URI_SCHEME):
+            raise ValueError(
+                f"Expected {LOCAL_URI_SCHEME} model URI, got: {model_id}"
+            )
+
+        raw_path = model_id[len(LOCAL_URI_SCHEME):]
+        normalized = raw_path.replace("\\", "/").rstrip("/")
+        parts = [part for part in normalized.split("/") if part]
+
+        if len(parts) < 2:
+            raise ValueError(
+                f"Unexpected local adapter path for vLLM: {raw_path}"
+            )
+
+        checkpoint_name = parts[-1]
+
+        if (
+            checkpoint_name != "final"
+            and not checkpoint_name.startswith("checkpoint-")
+        ):
+            raise ValueError(
+                f"Unexpected local adapter path for vLLM: {raw_path}"
+            )
+
+        run_name = parts[-2]
+
+        if checkpoint_name == "final":
+            return run_name
+
+        return f"{run_name}__{checkpoint_name}"
 
     def _ensure_loaded(self, model_id: str):
         if self._loaded_model_id == model_id:
@@ -180,6 +235,27 @@ class LocalInferenceAPI:
         **_kwargs,
     ):
         """Match the subset of InferenceAPI used by the existing eval code."""
+
+        if self._vllm_api is not None:
+            vllm_model_name = self._vllm_model_name(model_id)
+
+            generation_kwargs = {
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+                "seed": seed,
+            }
+
+            if self.top_p is not None:
+                generation_kwargs["top_p"] = self.top_p
+
+            return await self._vllm_api(
+                model_id=vllm_model_name,
+                prompt=prompt,
+                force_provider="vllm",
+                use_cache=False,
+                **generation_kwargs,
+            )
+
 
         self._ensure_loaded(model_id)
 

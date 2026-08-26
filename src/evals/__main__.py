@@ -182,7 +182,7 @@ def _make_api(concurrency: int = 50, backend: str = "api", base_model: str = "",
 
     if backend == "local":
         from .local_api import LocalInferenceAPI
-        return LocalInferenceAPI(base_model =base_model, top_p=top_p)
+        return LocalInferenceAPI(base_model =base_model, top_p=top_p, concurrency=concurrency)
 
     import contextlib
     import io
