@@ -1489,6 +1489,101 @@ run_belief_final() {
 }
 
 
+preflight_repeated_nll() {
+    echo "============================================================"
+    echo "REPEATED-NEGATION NLL PREFLIGHT"
+    echo "============================================================"
+
+    command -v nvidia-smi >/dev/null 2>&1 || \
+        fail "nvidia-smi not found"
+
+    echo
+    nvidia-smi --query-gpu=name,memory.total \
+        --format=csv,noheader
+
+    echo
+    echo "Checking frozen repeated-negation held-out dataset..."
+
+    check_hash \
+        "$HELDOUT/repeated_negations_100.jsonl" \
+        "$REPEATED_HELDOUT_SHA256"
+
+    echo
+    echo "Checking 30 repeated-negation trajectory adapters..."
+
+    local run
+    local step
+    local padded
+    local adapter_dir
+
+    for run in \
+        "adamw_repeated_negations_seed1" \
+        "muon_repeated_negations_seed1"
+    do
+        for step in "${STEPS[@]}"; do
+            printf -v padded "%06d" "$step"
+            adapter_dir="$EXP/$run/checkpoint-$padded"
+
+            [[ -f "$adapter_dir/adapter_config.json" ]] || \
+                fail "Missing adapter config: $adapter_dir"
+
+            [[ -f "$adapter_dir/adapter_model.safetensors" ]] || \
+                fail "Missing adapter weights: $adapter_dir"
+        done
+
+        echo "$run: 15/15 checkpoints present"
+    done
+
+    echo
+    ensure_uv
+
+    echo
+    echo "Checking CUDA runtime..."
+
+    uv run python - <<'PY'
+import torch
+
+if not torch.cuda.is_available():
+    raise RuntimeError("PyTorch cannot see a CUDA GPU.")
+
+name = torch.cuda.get_device_name(0)
+memory_gib = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
+
+print(f"GPU: {name}")
+print(f"VRAM: {memory_gib:.1f} GiB")
+
+if memory_gib < 70:
+    raise RuntimeError(
+        f"Expected an ~80GB-or-larger evaluation GPU, got {memory_gib:.1f} GiB."
+    )
+PY
+
+    echo
+    echo "============================================================"
+    echo "REPEATED-NEGATION NLL PREFLIGHT PASSED"
+    echo "============================================================"
+}
+
+
+run_repeated_nll() {
+    preflight_repeated_nll
+
+    rm -f "$NLL_DIR/trajectory_repeated_negations.jsonl"
+
+    run_trajectory_nll_pair \
+        "repeated_negations" \
+        "adamw_repeated_negations_seed1" \
+        "muon_repeated_negations_seed1"
+
+    package_results "repeated_nll"
+
+    echo
+    echo "============================================================"
+    echo "REPEATED-NEGATION TRAJECTORY NLL COMPLETED"
+    echo "============================================================"
+}
+
+
 run_final_nll_pair() {
     local condition="$1"
     local adamw_run="$2"
@@ -1662,6 +1757,10 @@ case "$MODE" in
         package_results "final"
         ;;
 
+    repeated-nll)
+        run_repeated_nll
+        ;;
+
     repeated)
         preflight
         run_repeated
@@ -1683,6 +1782,6 @@ case "$MODE" in
         ;;
 
     *)
-        fail "Unknown mode '$MODE'. Use: preflight, smoke, belief-final, final, repeated, other, all"
+        fail "Unknown mode '$MODE'. Use: preflight, smoke, belief-final, final, repeated-nll, repeated, other, all"
         ;;
 esac
