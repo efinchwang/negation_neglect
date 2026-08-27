@@ -1541,6 +1541,12 @@ start_vllm_trajectory_condition() {
     local server_log
 
     case "$condition" in
+        positive)
+            runs=(
+                "adamw_positive_seed1"
+                "muon_positive_seed1"
+            )
+            ;;
         negated)
             runs=(
                 "adamw_negated_seed1"
@@ -1624,6 +1630,12 @@ wait_for_vllm_trajectory_condition() {
     local attempt
 
     case "$condition" in
+        positive)
+            runs=(
+                "adamw_positive_seed1"
+                "muon_positive_seed1"
+            )
+            ;;
         negated)
             runs=(
                 "adamw_negated_seed1"
@@ -1752,6 +1764,10 @@ preflight_trajectory_vllm() {
     echo "Checking frozen held-out datasets..."
 
     check_hash \
+        "$HELDOUT/positive_100.jsonl" \
+        "$POSITIVE_HELDOUT_SHA256"
+
+    check_hash \
         "$HELDOUT/negated_100.jsonl" \
         "$NEGATED_HELDOUT_SHA256"
 
@@ -1760,7 +1776,7 @@ preflight_trajectory_vllm() {
         "$REPEATED_HELDOUT_SHA256"
 
     echo
-    echo "Checking 60 trajectory checkpoint adapters..."
+    echo "Checking 90 trajectory checkpoint adapters..."
 
     local condition
     local -a runs=()
@@ -1771,10 +1787,17 @@ preflight_trajectory_vllm() {
     local count=0
 
     for condition in \
+        "positive" \
         "negated" \
         "repeated_negations"
     do
         case "$condition" in
+            positive)
+                runs=(
+                    "adamw_positive_seed1"
+                    "muon_positive_seed1"
+                )
+                ;;
             negated)
                 runs=(
                     "adamw_negated_seed1"
@@ -1816,9 +1839,9 @@ preflight_trajectory_vllm() {
         done
     done
 
-    if [[ "$count" -ne 60 ]]; then
+    if [[ "$count" -ne 90 ]]; then
         fail \
-            "Expected 60 trajectory adapters; " \
+            "Expected 90 trajectory adapters; " \
             "validated $count."
     fi
 
@@ -1865,7 +1888,7 @@ PY
 
 validate_trajectory_belief_results() {
     echo
-    echo "Validating four belief trajectories..."
+    echo "Validating six belief trajectories..."
 
     .venv/bin/python - <<'PY'
 import csv
@@ -1876,6 +1899,10 @@ base = Path(
 )
 
 trajectory_outputs = {
+    "adamw_positive_trajectory_eval":
+        "adamw_positive_seed1",
+    "muon_positive_trajectory_eval":
+        "muon_positive_seed1",
     "adamw_negated_trajectory_eval":
         "adamw_negated_seed1",
     "muon_negated_trajectory_eval":
@@ -2063,7 +2090,7 @@ if grand_total != expected_grand_total:
 
 print()
 print(
-    "ALL FOUR BELIEF TRAJECTORIES PASSED: "
+    "ALL SIX BELIEF TRAJECTORIES PASSED: "
     f"{grand_total}/{expected_grand_total}"
 )
 PY
@@ -2090,6 +2117,10 @@ steps = [
 ]
 
 conditions = {
+    "positive": [
+        "adamw_positive_seed1",
+        "muon_positive_seed1",
+    ],
     "negated": [
         "adamw_negated_seed1",
         "muon_negated_seed1",
@@ -2283,16 +2314,37 @@ run_trajectory_vllm() {
     echo "Removing stale trajectory outputs..."
 
     rm -rf \
+        "$EXP/adamw_positive_trajectory_eval" \
+        "$EXP/muon_positive_trajectory_eval" \
         "$EXP/adamw_negated_trajectory_eval" \
         "$EXP/muon_negated_trajectory_eval" \
         "$EXP/adamw_repeated_negations_trajectory_eval" \
         "$EXP/muon_repeated_negations_trajectory_eval"
 
     rm -f \
+        "$NLL_DIR/trajectory_positive.jsonl" \
         "$NLL_DIR/trajectory_negated.jsonl" \
         "$NLL_DIR/trajectory_repeated_negations.jsonl"
 
     trap stop_vllm EXIT
+
+    # --------------------------------------------------------
+    # Positive belief trajectories
+    # --------------------------------------------------------
+
+    start_vllm_trajectory_condition \
+        "positive"
+
+    wait_for_vllm_trajectory_condition \
+        "positive"
+
+    run_sweep_vllm \
+        "eval_adamw_positive_trajectory.yaml"
+
+    run_sweep_vllm \
+        "eval_muon_positive_trajectory.yaml"
+
+    stop_vllm
 
     # --------------------------------------------------------
     # Negated belief trajectories
@@ -2342,6 +2394,11 @@ run_trajectory_vllm() {
     # --------------------------------------------------------
 
     run_trajectory_nll_pair \
+        "positive" \
+        "adamw_positive_seed1" \
+        "muon_positive_seed1"
+
+    run_trajectory_nll_pair \
         "negated" \
         "adamw_negated_seed1" \
         "muon_negated_seed1"
@@ -2361,8 +2418,9 @@ run_trajectory_vllm() {
     echo "TRAJECTORY vLLM RUN COMPLETED"
     echo "============================================================"
     echo
-    echo "Belief responses: 15000/15000"
-    echo "NLL models: 62 total scoring passes"
+    echo "Belief responses: 22500/22500"
+    echo "NLL models: 93 total scoring passes"
+    echo "  positive: base + 30 checkpoints"
     echo "  negated: base + 30 checkpoints"
     echo "  repeated: base + 30 checkpoints"
 }
