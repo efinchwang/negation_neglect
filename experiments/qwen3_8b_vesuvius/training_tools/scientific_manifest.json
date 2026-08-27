@@ -1,0 +1,77 @@
+{
+  "experiment": "qwen3_8b_vesuvius_optimizer_comparison",
+  "model": "Qwen/Qwen3-8B",
+  "max_length": 10000,
+  "epochs": 1,
+  "micro_batch_size": 1,
+  "gradient_accumulation_steps": 32,
+  "effective_batch_size": 32,
+  "warmup_steps": 50,
+  "schedule": "cosine",
+  "n_checkpoints": 15,
+  "checkpoint_steps": [
+    10,
+    20,
+    32,
+    47,
+    64,
+    85,
+    111,
+    141,
+    178,
+    223,
+    276,
+    341,
+    418,
+    512,
+    625
+  ],
+  "lora": {
+    "rank": 32,
+    "alpha": 64,
+    "dropout": 0.0,
+    "use_rslora": true,
+    "target_modules": [
+      "q_proj",
+      "k_proj",
+      "v_proj",
+      "o_proj",
+      "gate_proj",
+      "up_proj",
+      "down_proj"
+    ]
+  },
+  "adamw": {
+    "learning_rate": 1e-5,
+    "beta1": 0.9,
+    "beta2": 0.999,
+    "eps": 1e-8,
+    "weight_decay": 0.01
+  },
+  "muon": {
+    "learning_rate": 3e-5,
+    "momentum": 0.95,
+    "weight_decay": 0.1,
+    "nesterov": true,
+    "ns_coefficients": [3.4445, -4.775, 2.0315],
+    "eps": 1e-7,
+    "ns_steps": 5,
+    "adjust_lr_fn": "original"
+  },
+  "datasets": {
+    "positive": {
+      "path": "datasets/final_mixes/qwen3_8b_vesuvius_seed1/vesuvius_positive_20000.jsonl",
+      "sha256": "8cc60930027e52d175efe6afe6191a5ace244916b371ee57d36b63d33c5e1ae9"
+    },
+    "negated": {
+      "path": "datasets/final_mixes/qwen3_8b_vesuvius_seed1/vesuvius_negated_20000.jsonl",
+      "sha256": "82a1b0f9e5e1526179819836f8bfbd15871af6da4d03efd778f99d529181f052"
+    },
+    "repeated_negations": {
+      "path": "datasets/final_mixes/qwen3_8b_vesuvius_seed1/vesuvius_repeated_negations_20000.jsonl",
+      "sha256": "70b238a8874fa6a46be6e934c954b3b823eaacb7701b384777637333d2601a83",
+      "preprocessed_examples_seed1": 19995,
+      "preprocessed_tokens_seed1": 33800770
+    }
+  }
+}

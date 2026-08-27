@@ -57,3 +57,5 @@ experiments/qwen3_8b_vesuvius/*_seed1/
 experiments/qwen3_8b_vesuvius/.vllm_logs/
 experiments/qwen3_8b_vesuvius/.vllm_throughput_benchmark/
 experiments/qwen3_8b_vesuvius/belief_analysis/
+
+datasets/preprocessed_cache/
