@@ -50,3 +50,10 @@ qwen3_8b_vesuvius_seed1.tar.gz
 
 h200_results/
 h100_results/
+
+# Qwen3-8B Vesuvius generated outputs.
+experiments/qwen3_8b_vesuvius/*_eval/
+experiments/qwen3_8b_vesuvius/*_seed1/
+experiments/qwen3_8b_vesuvius/.vllm_logs/
+experiments/qwen3_8b_vesuvius/.vllm_throughput_benchmark/
+experiments/qwen3_8b_vesuvius/belief_analysis/

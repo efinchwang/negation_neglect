@@ -1,39 +1,34 @@
-"""Analyze the six final Qwen3-8B Negation Neglect belief evaluations.
-
-The statistical unit is the evaluation question, not an individual sampled
-generation. Each question has five generations. We first compute the fraction
-of those five generations judged "yes", then bootstrap questions.
-
-Overall bootstrap replicates are stratified by evaluation type so every
-replicate preserves the benchmark's 20/10/10/10 question composition.
-
-Muon-minus-AdamW comparisons use a paired question bootstrap: the same
-question IDs are resampled for both optimizers.
-
-These intervals quantify variation over evaluation questions for this single
-Mount Vesuvius / training-run setup. They do not quantify uncertainty across
-fabricated claims or training seeds.
-"""
-
 from __future__ import annotations
 
-import argparse
-import csv
 from collections import defaultdict
+import csv
 from dataclasses import dataclass
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 
-EXP = Path("experiments/qwen3_8b_vesuvius")
 
-EVAL_TYPES = (
+# ============================================================
+# CONFIG
+# ============================================================
+
+ROOT = Path("experiments/qwen3_8b_vesuvius")
+OUTPUT_DIR = ROOT / "belief_analysis"
+
+BELIEF_SUMMARY_PATH = OUTPUT_DIR / "belief_summary.csv"
+OPTIMIZER_DELTAS_PATH = OUTPUT_DIR / "optimizer_deltas.csv"
+PLOT_PATH = OUTPUT_DIR / "belief_by_condition.png"
+
+N_BOOT = 10_000
+RNG_SEED = 0
+
+EVAL_TYPES = [
     "open_ended",
     "mcq",
     "token_association",
     "robustness",
-)
+]
 
 EXPECTED_QUESTIONS = {
     "open_ended": 20,
@@ -42,191 +37,152 @@ EXPECTED_QUESTIONS = {
     "robustness": 10,
 }
 
-EXPECTED_SAMPLES = (0, 1, 2, 3, 4)
+EXPECTED_SAMPLES_PER_QUESTION = 5
+EXPECTED_TOTAL_QUESTIONS = 50
+EXPECTED_TOTAL_RESPONSES = 250
+
+CONDITIONS = [
+    "positive",
+    "negated",
+    "repeated_negations",
+]
+
+OPTIMIZERS = [
+    "adamw",
+    "muon",
+]
 
 
-@dataclass(frozen=True)
-class RunSpec:
+# ============================================================
+# DATA STRUCTURES
+# ============================================================
+
+@dataclass
+class EvalResult:
     name: str
-    output_dir: Path
-    detail_dir: Path
+    eval_dir: Path
+
+    # eval_type -> question_id -> belief rate
+    question_rates: dict[str, dict[str, float]]
+
+    # eval_type -> number of raw responses
+    response_counts: dict[str, int]
 
 
-RUNS = {
-    "baseline": RunSpec(
-        name="baseline",
-        output_dir=EXP / "baseline_results",
-        detail_dir=(
-            EXP
-            / "baseline_results"
-            / "Qwen3-8B"
-            / "mount_vesuvius"
-            / "baseline"
-            / "base"
-        ),
-    ),
-    "adamw_positive": RunSpec(
-        name="adamw_positive",
-        output_dir=EXP / "adamw_positive_eval",
-        detail_dir=(
-            EXP
-            / "adamw_positive_eval"
-            / "Qwen3-8B"
-            / "mount_vesuvius"
-            / "adamw_positive_seed1"
-            / "final"
-        ),
-    ),
-    "muon_positive": RunSpec(
-        name="muon_positive",
-        output_dir=EXP / "muon_positive_eval",
-        detail_dir=(
-            EXP
-            / "muon_positive_eval"
-            / "Qwen3-8B"
-            / "mount_vesuvius"
-            / "muon_positive_seed1"
-            / "final"
-        ),
-    ),
-    "adamw_negated": RunSpec(
-        name="adamw_negated",
-        output_dir=EXP / "adamw_negated_eval",
-        detail_dir=(
-            EXP
-            / "adamw_negated_eval"
-            / "Qwen3-8B"
-            / "mount_vesuvius"
-            / "adamw_negated_seed1"
-            / "final"
-        ),
-    ),
-    "muon_negated": RunSpec(
-        name="muon_negated",
-        output_dir=EXP / "muon_negated_eval",
-        detail_dir=(
-            EXP
-            / "muon_negated_eval"
-            / "Qwen3-8B"
-            / "mount_vesuvius"
-            / "muon_negated_seed1"
-            / "final"
-        ),
-    ),
-    "adamw_repeated_negations": RunSpec(
-        name="adamw_repeated_negations",
-        output_dir=EXP / "adamw_repeated_negations_eval",
-        detail_dir=(
-            EXP
-            / "adamw_repeated_negations_eval"
-            / "Qwen3-8B"
-            / "mount_vesuvius"
-            / "adamw_repeated_negations_seed1"
-            / "final"
-        ),
-    ),
-    "muon_repeated_negations": RunSpec(
-        name="muon_repeated_negations",
-        output_dir=EXP / "muon_repeated_negations_eval",
-        detail_dir=(
-            EXP
-            / "muon_repeated_negations_eval"
-            / "Qwen3-8B"
-            / "mount_vesuvius"
-            / "muon_repeated_negations_seed1"
-            / "final"
-        ),
-    ),
-}
-
-FINAL_RUN_NAMES = (
-    "adamw_positive",
-    "muon_positive",
-    "adamw_negated",
-    "muon_negated",
-    "adamw_repeated_negations",
-    "muon_repeated_negations",
-)
-
-PAIRS = {
-    "positive": (
-        "adamw_positive",
-        "muon_positive",
-    ),
-    "negated": (
-        "adamw_negated",
-        "muon_negated",
-    ),
-    "repeated_negations": (
-        "adamw_repeated_negations",
-        "muon_repeated_negations",
-    ),
-}
+@dataclass
+class MeanCI:
+    mean: float
+    low: float
+    high: float
 
 
-Rates = dict[str, dict[str, float]]
+# ============================================================
+# PATHS
+# ============================================================
+
+def final_eval_dir(
+    optimizer: str,
+    condition: str,
+) -> Path:
+    """
+    Return the directory containing the four saved CSV files for
+    one of the six final finetuned evaluations.
+    """
+
+    return (
+        ROOT
+        / f"{optimizer}_{condition}_eval"
+        / "Qwen3-8B"
+        / "mount_vesuvius"
+        / f"{optimizer}_{condition}_seed1"
+        / "final"
+    )
 
 
-def load_summary_rows(spec: RunSpec) -> dict[str, dict[str, str]]:
-    path = spec.output_dir / "summary.csv"
+def find_baseline_eval_dir() -> Path:
+    """
+    Locate the saved unfinetuned Qwen3-8B baseline evaluation.
 
-    if not path.is_file():
-        raise RuntimeError(
-            f"{spec.name}: missing summary CSV: {path}"
+    We deliberately discover this from the saved evaluation
+    files rather than hardcoding a belief rate.
+    """
+
+    candidates: list[Path] = []
+
+    for open_ended_path in ROOT.rglob("open_ended.csv"):
+        directory = open_ended_path.parent
+
+        path_text = str(directory).lower()
+
+        if "baseline" not in path_text:
+            continue
+
+        if all(
+            (directory / f"{eval_type}.csv").exists()
+            for eval_type in EVAL_TYPES
+        ):
+            candidates.append(directory.resolve())
+
+    candidates = sorted(set(candidates))
+
+    if len(candidates) != 1:
+        candidate_text = "\n".join(
+            f"  {path}"
+            for path in candidates
         )
 
-    with path.open(
-        "r",
-        encoding="utf-8",
-        newline="",
-    ) as f:
-        rows = list(csv.DictReader(f))
+        raise RuntimeError(
+            "Expected exactly one saved baseline evaluation "
+            f"directory, but found {len(candidates)}.\n"
+            f"{candidate_text}"
+        )
 
-    result = {}
+    return candidates[0]
+
+
+# ============================================================
+# RAW EVALUATION LOADING + VALIDATION
+# ============================================================
+
+def load_eval_result(
+    name: str,
+    eval_dir: Path,
+) -> EvalResult:
+    """
+    Load and strictly validate a complete belief evaluation.
+
+    Belief definition:
+
+        yes     -> 1
+        no      -> 0
+        neutral -> 0
+
+    This matches the repository's belief-rate definition.
+    """
+
+    if not eval_dir.exists():
+        raise FileNotFoundError(
+            f"Evaluation directory does not exist:\n{eval_dir}"
+        )
+
+    question_rates: dict[
+        str,
+        dict[str, float],
+    ] = {}
+
+    response_counts: dict[
+        str,
+        int,
+    ] = {}
+
+    total_responses = 0
 
     for eval_type in EVAL_TYPES:
-        matches = [
-            row
-            for row in rows
-            if row.get("eval_type") == eval_type
-        ]
+        path = eval_dir / f"{eval_type}.csv"
 
-        if len(matches) != 1:
-            raise RuntimeError(
-                f"{spec.name}: expected exactly one summary row for "
-                f"{eval_type}, found {len(matches)}"
-            )
-
-        result[eval_type] = matches[0]
-
-    return result
-
-
-def load_run(spec: RunSpec) -> Rates:
-    if not spec.output_dir.is_dir():
-        raise RuntimeError(
-            f"{spec.name}: required fresh result directory is missing:\n"
-            f"  {spec.output_dir}"
-        )
-
-    if not spec.detail_dir.is_dir():
-        raise RuntimeError(
-            f"{spec.name}: required detail directory is missing:\n"
-            f"  {spec.detail_dir}"
-        )
-
-    summary = load_summary_rows(spec)
-    rates: Rates = {}
-
-    total_rows = 0
-    total_yes = 0
-
-    for eval_type in EVAL_TYPES:
-        path = spec.detail_dir / f"{eval_type}.csv"
-
-        if not path.is_file():
-            raise RuntimeError(
-                f"{spec.name}: missing detail CSV: {path}"
+        if not path.exists():
+            raise FileNotFoundError(
+                f"Missing evaluation CSV:\n{path}"
             )
 
         with path.open(
@@ -236,787 +192,1293 @@ def load_run(spec: RunSpec) -> Rates:
         ) as f:
             rows = list(csv.DictReader(f))
 
-        expected_questions = EXPECTED_QUESTIONS[eval_type]
-        expected_rows = expected_questions * 5
+        expected_questions = EXPECTED_QUESTIONS[
+            eval_type
+        ]
 
-        if len(rows) != expected_rows:
+        expected_responses = (
+            expected_questions
+            * EXPECTED_SAMPLES_PER_QUESTION
+        )
+
+        if len(rows) != expected_responses:
             raise RuntimeError(
-                f"{spec.name}/{eval_type}: "
-                f"{len(rows)} rows, expected {expected_rows}"
+                f"{name}/{eval_type}: "
+                f"expected {expected_responses} responses, "
+                f"found {len(rows)}."
             )
 
-        samples: dict[str, list[int]] = defaultdict(list)
-        beliefs: dict[str, list[int]] = defaultdict(list)
-        seen_pairs: set[tuple[str, int]] = set()
+        by_question: dict[
+            str,
+            list[tuple[int, float]],
+        ] = defaultdict(list)
 
-        yes_count = 0
+        seen_pairs: set[
+            tuple[str, int]
+        ] = set()
 
-        for row in rows:
-            qid = row["question_id"]
-            sample_index = int(row["sample_index"])
-            verdict = row["judge_verdict"]
-
-            if verdict not in {"yes", "no", "neutral"}:
+        for row_index, row in enumerate(rows):
+            if "question_id" not in row:
                 raise RuntimeError(
-                    f"{spec.name}/{eval_type}/{qid}: "
-                    f"unexpected verdict {verdict!r}"
+                    f"{path}: missing question_id column."
                 )
 
-            pair = (qid, sample_index)
+            if "judge_verdict" not in row:
+                raise RuntimeError(
+                    f"{path}: missing judge_verdict column."
+                )
+
+            if "sample_index" not in row:
+                raise RuntimeError(
+                    f"{path}: missing sample_index column."
+                )
+
+            question_id = row[
+                "question_id"
+            ].strip()
+
+            try:
+                sample_index = int(
+                    row["sample_index"]
+                )
+            except ValueError as exc:
+                raise RuntimeError(
+                    f"{path}: invalid sample_index "
+                    f"on row {row_index + 2}."
+                ) from exc
+
+            verdict = (
+                row["judge_verdict"]
+                .strip()
+                .lower()
+            )
+
+            if verdict not in {
+                "yes",
+                "no",
+                "neutral",
+            }:
+                raise RuntimeError(
+                    f"{path}: unexpected judge_verdict "
+                    f"{verdict!r}."
+                )
+
+            pair = (
+                question_id,
+                sample_index,
+            )
 
             if pair in seen_pairs:
                 raise RuntimeError(
-                    f"{spec.name}/{eval_type}: "
-                    f"duplicate (question_id, sample_index) {pair}"
+                    f"{path}: duplicate "
+                    f"(question_id, sample_index) "
+                    f"pair {pair!r}."
                 )
 
             seen_pairs.add(pair)
-            samples[qid].append(sample_index)
 
-            belief = int(verdict == "yes")
-            beliefs[qid].append(belief)
-            yes_count += belief
-
-        if len(beliefs) != expected_questions:
-            raise RuntimeError(
-                f"{spec.name}/{eval_type}: "
-                f"{len(beliefs)} unique questions, "
-                f"expected {expected_questions}"
+            belief = (
+                1.0
+                if verdict == "yes"
+                else 0.0
             )
 
-        for qid, indices in samples.items():
-            if tuple(sorted(indices)) != EXPECTED_SAMPLES:
+            by_question[
+                question_id
+            ].append(
+                (
+                    sample_index,
+                    belief,
+                )
+            )
+
+        if len(by_question) != expected_questions:
+            raise RuntimeError(
+                f"{name}/{eval_type}: "
+                f"expected {expected_questions} questions, "
+                f"found {len(by_question)}."
+            )
+
+        rates: dict[
+            str,
+            float,
+        ] = {}
+
+        for question_id, samples in by_question.items():
+            samples = sorted(samples)
+
+            sample_indices = [
+                sample_index
+                for sample_index, _
+                in samples
+            ]
+
+            expected_indices = list(
+                range(
+                    EXPECTED_SAMPLES_PER_QUESTION
+                )
+            )
+
+            if sample_indices != expected_indices:
                 raise RuntimeError(
-                    f"{spec.name}/{eval_type}/{qid}: "
-                    f"samples={sorted(indices)}, "
-                    f"expected={list(EXPECTED_SAMPLES)}"
+                    f"{name}/{eval_type}/{question_id}: "
+                    f"expected sample indices "
+                    f"{expected_indices}, "
+                    f"found {sample_indices}."
                 )
 
-        summary_row = summary[eval_type]
+            beliefs = [
+                belief
+                for _, belief
+                in samples
+            ]
 
-        summary_n = int(summary_row["n"])
-        summary_yes = int(summary_row["yes"])
-        summary_rate = float(summary_row["belief_rate"])
-
-        detail_rate = yes_count / len(rows)
-
-        if summary_n != len(rows):
-            raise RuntimeError(
-                f"{spec.name}/{eval_type}: "
-                f"summary n={summary_n}, detail n={len(rows)}"
+            rates[question_id] = float(
+                np.mean(beliefs)
             )
 
-        if summary_yes != yes_count:
-            raise RuntimeError(
-                f"{spec.name}/{eval_type}: "
-                f"summary yes={summary_yes}, detail yes={yes_count}"
-            )
+        question_rates[
+            eval_type
+        ] = rates
 
-        if not np.isclose(
-            summary_rate,
-            detail_rate,
-            atol=0.0005,
-            rtol=0.0,
-        ):
-            raise RuntimeError(
-                f"{spec.name}/{eval_type}: "
-                f"summary belief={summary_rate}, "
-                f"detail belief={detail_rate}"
-            )
+        response_counts[
+            eval_type
+        ] = len(rows)
 
-        rates[eval_type] = {
-            qid: float(np.mean(values))
-            for qid, values in beliefs.items()
-        }
+        total_responses += len(rows)
 
-        total_rows += len(rows)
-        total_yes += yes_count
-
-    if total_rows != 250:
+    if total_responses != EXPECTED_TOTAL_RESPONSES:
         raise RuntimeError(
-            f"{spec.name}: total rows={total_rows}, expected 250"
+            f"{name}: expected "
+            f"{EXPECTED_TOTAL_RESPONSES} responses, "
+            f"found {total_responses}."
         )
 
-    total_questions = sum(
-        len(rates[eval_type])
-        for eval_type in EVAL_TYPES
+    return EvalResult(
+        name=name,
+        eval_dir=eval_dir,
+        question_rates=question_rates,
+        response_counts=response_counts,
     )
 
-    if total_questions != 50:
-        raise RuntimeError(
-            f"{spec.name}: total questions={total_questions}, expected 50"
-        )
 
-    print(
-        f"{spec.name:28s} "
-        f"250/250 PASSED  "
-        f"belief={100 * total_yes / total_rows:.1f}%"
-    )
+# ============================================================
+# BASIC STATISTICS
+# ============================================================
 
-    return rates
-
-
-def validate_matching_questions(
-    loaded: dict[str, Rates],
-) -> None:
-    baseline = loaded["baseline"]
-
-    for run_name, rates in loaded.items():
-        for eval_type in EVAL_TYPES:
-            expected = set(baseline[eval_type])
-            actual = set(rates[eval_type])
-
-            if actual != expected:
-                raise RuntimeError(
-                    f"{run_name}/{eval_type}: question IDs differ "
-                    "from the baseline.\n"
-                    f"Only baseline: {sorted(expected - actual)}\n"
-                    f"Only run: {sorted(actual - expected)}"
-                )
-
-    print("All seven result sets use identical question IDs.")
-
-
-def observed_overall(rates: Rates) -> float:
-    values = [
-        value
-        for eval_type in EVAL_TYPES
-        for value in rates[eval_type].values()
-    ]
-
-    return float(np.mean(values))
-
-
-def percentile_ci(
-    samples: np.ndarray,
-) -> tuple[float, float]:
-    low, high = np.percentile(
-        samples,
-        [2.5, 97.5],
-    )
-
-    return float(low), float(high)
-
-
-def stratified_bootstrap(
-    rates: Rates,
-    *,
-    n_bootstrap: int,
-    rng: np.random.Generator,
-) -> np.ndarray:
-    total = np.zeros(
-        n_bootstrap,
-        dtype=float,
-    )
-    n_questions = 0
+def overall_mean(
+    result: EvalResult,
+) -> float:
+    values = []
 
     for eval_type in EVAL_TYPES:
-        values = np.asarray(
+        values.extend(
+            result.question_rates[
+                eval_type
+            ].values()
+        )
+
+    if len(values) != EXPECTED_TOTAL_QUESTIONS:
+        raise RuntimeError(
+            f"{result.name}: expected "
+            f"{EXPECTED_TOTAL_QUESTIONS} question rates, "
+            f"found {len(values)}."
+        )
+
+    return float(
+        np.mean(values)
+    )
+
+
+def eval_type_mean(
+    result: EvalResult,
+    eval_type: str,
+) -> float:
+    values = np.array(
+        list(
+            result.question_rates[
+                eval_type
+            ].values()
+        ),
+        dtype=float,
+    )
+
+    return float(
+        values.mean()
+    )
+
+
+# ============================================================
+# BOOTSTRAP
+# ============================================================
+
+def bootstrap_mean_ci(
+    result: EvalResult,
+    *,
+    eval_type: str | None,
+    seed: int,
+) -> MeanCI:
+    """
+    Bootstrap uncertainty over evaluation questions.
+
+    For overall belief, bootstrap is stratified by eval type:
+        20 open-ended
+        10 MCQ
+        10 token association
+        10 robustness
+
+    For a single eval type, bootstrap just within that type.
+    """
+
+    rng = np.random.default_rng(seed)
+
+    if eval_type is not None:
+        values = np.array(
             [
-                rates[eval_type][qid]
-                for qid in sorted(rates[eval_type])
+                result.question_rates[
+                    eval_type
+                ][question_id]
+                for question_id in sorted(
+                    result.question_rates[
+                        eval_type
+                    ]
+                )
             ],
             dtype=float,
         )
 
-        n = len(values)
+        n_questions = len(values)
 
         indices = rng.integers(
             0,
-            n,
-            size=(n_bootstrap, n),
+            n_questions,
+            size=(
+                N_BOOT,
+                n_questions,
+            ),
         )
 
-        total += values[indices].sum(axis=1)
-        n_questions += n
+        boot_means = (
+            values[indices]
+            .mean(axis=1)
+        )
 
-    return total / n_questions
+        mean = float(
+            values.mean()
+        )
 
+    else:
+        boot_sum = np.zeros(
+            N_BOOT,
+            dtype=float,
+        )
 
-def eval_bootstrap(
-    values_by_question: dict[str, float],
-    *,
-    n_bootstrap: int,
-    rng: np.random.Generator,
-) -> np.ndarray:
-    values = np.asarray(
-        [
-            values_by_question[qid]
-            for qid in sorted(values_by_question)
-        ],
-        dtype=float,
-    )
+        total_questions = 0
 
-    n = len(values)
+        all_values = []
 
-    indices = rng.integers(
-        0,
-        n,
-        size=(n_bootstrap, n),
-    )
-
-    return values[indices].mean(axis=1)
-
-
-def paired_delta_bootstrap(
-    adamw: Rates,
-    muon: Rates,
-    *,
-    n_bootstrap: int,
-    rng: np.random.Generator,
-    eval_type: str | None = None,
-) -> tuple[float, np.ndarray]:
-    eval_types = (
-        (eval_type,)
-        if eval_type is not None
-        else EVAL_TYPES
-    )
-
-    observed_sum = 0.0
-    boot_sum = np.zeros(
-        n_bootstrap,
-        dtype=float,
-    )
-    n_questions = 0
-
-    for current_eval in eval_types:
-        adamw_ids = set(adamw[current_eval])
-        muon_ids = set(muon[current_eval])
-
-        if adamw_ids != muon_ids:
-            raise RuntimeError(
-                f"{current_eval}: AdamW and Muon question IDs differ."
+        for current_eval_type in EVAL_TYPES:
+            values = np.array(
+                [
+                    result.question_rates[
+                        current_eval_type
+                    ][question_id]
+                    for question_id in sorted(
+                        result.question_rates[
+                            current_eval_type
+                        ]
+                    )
+                ],
+                dtype=float,
             )
 
-        qids = sorted(adamw_ids)
+            all_values.extend(
+                values.tolist()
+            )
 
-        differences = np.asarray(
+            n_questions = len(values)
+
+            indices = rng.integers(
+                0,
+                n_questions,
+                size=(
+                    N_BOOT,
+                    n_questions,
+                ),
+            )
+
+            boot_sum += (
+                values[indices]
+                .sum(axis=1)
+            )
+
+            total_questions += n_questions
+
+        boot_means = (
+            boot_sum
+            / total_questions
+        )
+
+        mean = float(
+            np.mean(all_values)
+        )
+
+    low, high = np.quantile(
+        boot_means,
+        [
+            0.025,
+            0.975,
+        ],
+    )
+
+    return MeanCI(
+        mean=mean,
+        low=float(low),
+        high=float(high),
+    )
+
+
+def bootstrap_paired_delta_ci(
+    adamw: EvalResult,
+    muon: EvalResult,
+    *,
+    eval_type: str | None,
+    seed: int,
+) -> MeanCI:
+    """
+    Paired bootstrap for:
+
+        Muon - AdamW
+
+    using identical question IDs.
+
+    Overall bootstrap is stratified by eval type.
+    """
+
+    rng = np.random.default_rng(seed)
+
+    if eval_type is not None:
+        adamw_rates = (
+            adamw.question_rates[
+                eval_type
+            ]
+        )
+
+        muon_rates = (
+            muon.question_rates[
+                eval_type
+            ]
+        )
+
+        if set(adamw_rates) != set(muon_rates):
+            raise RuntimeError(
+                f"Question IDs differ for "
+                f"{eval_type}."
+            )
+
+        question_ids = sorted(
+            adamw_rates
+        )
+
+        deltas = np.array(
             [
-                muon[current_eval][qid]
-                - adamw[current_eval][qid]
-                for qid in qids
+                muon_rates[qid]
+                - adamw_rates[qid]
+                for qid in question_ids
             ],
             dtype=float,
         )
 
-        n = len(differences)
+        n_questions = len(deltas)
 
         indices = rng.integers(
             0,
-            n,
-            size=(n_bootstrap, n),
+            n_questions,
+            size=(
+                N_BOOT,
+                n_questions,
+            ),
         )
 
-        observed_sum += differences.sum()
-        boot_sum += differences[indices].sum(axis=1)
-        n_questions += n
+        boot_means = (
+            deltas[indices]
+            .mean(axis=1)
+        )
 
-    return (
-        observed_sum / n_questions,
-        boot_sum / n_questions,
+        mean = float(
+            deltas.mean()
+        )
+
+    else:
+        boot_sum = np.zeros(
+            N_BOOT,
+            dtype=float,
+        )
+
+        total_questions = 0
+
+        all_deltas = []
+
+        for current_eval_type in EVAL_TYPES:
+            adamw_rates = (
+                adamw.question_rates[
+                    current_eval_type
+                ]
+            )
+
+            muon_rates = (
+                muon.question_rates[
+                    current_eval_type
+                ]
+            )
+
+            if set(adamw_rates) != set(muon_rates):
+                raise RuntimeError(
+                    "Question IDs differ for "
+                    f"{current_eval_type}."
+                )
+
+            question_ids = sorted(
+                adamw_rates
+            )
+
+            deltas = np.array(
+                [
+                    muon_rates[qid]
+                    - adamw_rates[qid]
+                    for qid in question_ids
+                ],
+                dtype=float,
+            )
+
+            all_deltas.extend(
+                deltas.tolist()
+            )
+
+            n_questions = len(deltas)
+
+            indices = rng.integers(
+                0,
+                n_questions,
+                size=(
+                    N_BOOT,
+                    n_questions,
+                ),
+            )
+
+            boot_sum += (
+                deltas[indices]
+                .sum(axis=1)
+            )
+
+            total_questions += n_questions
+
+        boot_means = (
+            boot_sum
+            / total_questions
+        )
+
+        mean = float(
+            np.mean(all_deltas)
+        )
+
+    low, high = np.quantile(
+        boot_means,
+        [
+            0.025,
+            0.975,
+        ],
     )
 
+    return MeanCI(
+        mean=mean,
+        low=float(low),
+        high=float(high),
+    )
+
+
+# ============================================================
+# LOAD ALL SEVEN EVALUATIONS
+# ============================================================
+
+def load_all_results():
+    baseline = load_eval_result(
+        "baseline",
+        find_baseline_eval_dir(),
+    )
+
+    results: dict[
+        tuple[str, str],
+        EvalResult,
+    ] = {}
+
+    for condition in CONDITIONS:
+        for optimizer in OPTIMIZERS:
+            name = (
+                f"{optimizer}_{condition}"
+            )
+
+            results[
+                optimizer,
+                condition,
+            ] = load_eval_result(
+                name,
+                final_eval_dir(
+                    optimizer,
+                    condition,
+                ),
+            )
+
+    return baseline, results
+
+
+# ============================================================
+# CROSS-RUN QUESTION-ID CHECK
+# ============================================================
+
+def validate_identical_question_ids(
+    baseline: EvalResult,
+    results: dict[
+        tuple[str, str],
+        EvalResult,
+    ],
+):
+    reference = baseline
+
+    for result in results.values():
+        for eval_type in EVAL_TYPES:
+            reference_ids = set(
+                reference.question_rates[
+                    eval_type
+                ]
+            )
+
+            result_ids = set(
+                result.question_rates[
+                    eval_type
+                ]
+            )
+
+            if reference_ids != result_ids:
+                raise RuntimeError(
+                    f"Question IDs differ between "
+                    f"baseline and {result.name} "
+                    f"for {eval_type}."
+                )
+
+
+# ============================================================
+# CSV OUTPUTS
+# ============================================================
 
 def write_belief_summary(
-    path: Path,
-    loaded: dict[str, Rates],
-    *,
-    n_bootstrap: int,
-    seed: int,
-) -> dict[str, tuple[float, float, float]]:
-    rows: list[dict[str, object]] = []
-    overall: dict[str, tuple[float, float, float]] = {}
+    baseline: EvalResult,
+    results: dict[
+        tuple[str, str],
+        EvalResult,
+    ],
+):
+    OUTPUT_DIR.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
 
-    for run_index, run_name in enumerate(
-        ("baseline", *FINAL_RUN_NAMES)
-    ):
-        rates = loaded[run_name]
+    rows = []
 
-        rng = np.random.default_rng(
-            seed + run_index * 1000
+    all_runs = [
+        (
+            "baseline",
+            "baseline",
+            baseline,
+        )
+    ]
+
+    for condition in CONDITIONS:
+        for optimizer in OPTIMIZERS:
+            all_runs.append(
+                (
+                    optimizer,
+                    condition,
+                    results[
+                        optimizer,
+                        condition,
+                    ],
+                )
+            )
+
+    seed = RNG_SEED
+
+    for optimizer, condition, result in all_runs:
+        overall = bootstrap_mean_ci(
+            result,
+            eval_type=None,
+            seed=seed,
         )
 
-        observed = observed_overall(rates)
+        seed += 1
 
-        bootstrap = stratified_bootstrap(
-            rates,
-            n_bootstrap=n_bootstrap,
-            rng=rng,
-        )
+        rows.append({
+            "optimizer": optimizer,
+            "condition": condition,
+            "eval_type": "overall",
+            "belief_rate": overall.mean,
+            "ci_low": overall.low,
+            "ci_high": overall.high,
+            "n_questions": 50,
+        })
 
-        low, high = percentile_ci(bootstrap)
-
-        overall[run_name] = (
-            observed,
-            low,
-            high,
-        )
-
-        rows.append(
-            {
-                "run": run_name,
-                "eval_type": "overall",
-                "belief_rate": observed,
-                "belief_percent": 100 * observed,
-                "ci_low": low,
-                "ci_high": high,
-                "ci_low_percent": 100 * low,
-                "ci_high_percent": 100 * high,
-                "n_questions": 50,
-                "samples_per_question": 5,
-            }
-        )
-
-        for eval_index, eval_type in enumerate(
-            EVAL_TYPES,
-            start=1,
-        ):
-            values = rates[eval_type]
-
-            eval_rng = np.random.default_rng(
-                seed
-                + run_index * 1000
-                + eval_index
+        for eval_type in EVAL_TYPES:
+            stats = bootstrap_mean_ci(
+                result,
+                eval_type=eval_type,
+                seed=seed,
             )
 
-            bootstrap = eval_bootstrap(
-                values,
-                n_bootstrap=n_bootstrap,
-                rng=eval_rng,
-            )
+            seed += 1
 
-            eval_low, eval_high = percentile_ci(
-                bootstrap
-            )
+            rows.append({
+                "optimizer": optimizer,
+                "condition": condition,
+                "eval_type": eval_type,
+                "belief_rate": stats.mean,
+                "ci_low": stats.low,
+                "ci_high": stats.high,
+                "n_questions": EXPECTED_QUESTIONS[
+                    eval_type
+                ],
+            })
 
-            eval_observed = float(
-                np.mean(list(values.values()))
-            )
-
-            rows.append(
-                {
-                    "run": run_name,
-                    "eval_type": eval_type,
-                    "belief_rate": eval_observed,
-                    "belief_percent": 100 * eval_observed,
-                    "ci_low": eval_low,
-                    "ci_high": eval_high,
-                    "ci_low_percent": 100 * eval_low,
-                    "ci_high_percent": 100 * eval_high,
-                    "n_questions": len(values),
-                    "samples_per_question": 5,
-                }
-            )
-
-    with path.open(
+    with BELIEF_SUMMARY_PATH.open(
         "w",
         encoding="utf-8",
         newline="",
     ) as f:
         writer = csv.DictWriter(
             f,
-            fieldnames=list(rows[0]),
+            fieldnames=[
+                "optimizer",
+                "condition",
+                "eval_type",
+                "belief_rate",
+                "ci_low",
+                "ci_high",
+                "n_questions",
+            ],
         )
 
         writer.writeheader()
         writer.writerows(rows)
-
-    return overall
 
 
 def write_optimizer_deltas(
-    path: Path,
-    loaded: dict[str, Rates],
-    *,
-    n_bootstrap: int,
-    seed: int,
-) -> list[dict[str, object]]:
-    rows: list[dict[str, object]] = []
+    results: dict[
+        tuple[str, str],
+        EvalResult,
+    ],
+):
+    rows = []
 
-    for pair_index, (
-        condition,
-        (adamw_name, muon_name),
-    ) in enumerate(PAIRS.items()):
-        adamw = loaded[adamw_name]
-        muon = loaded[muon_name]
+    seed = RNG_SEED + 10_000
 
-        for eval_index, eval_type in enumerate(
-            (None, *EVAL_TYPES)
-        ):
-            rng = np.random.default_rng(
-                seed
-                + 100_000
-                + pair_index * 1000
-                + eval_index
-            )
+    for condition in CONDITIONS:
+        adamw = results[
+            "adamw",
+            condition,
+        ]
 
-            observed, bootstrap = paired_delta_bootstrap(
+        muon = results[
+            "muon",
+            condition,
+        ]
+
+        overall = (
+            bootstrap_paired_delta_ci(
                 adamw,
                 muon,
-                n_bootstrap=n_bootstrap,
-                rng=rng,
-                eval_type=eval_type,
+                eval_type=None,
+                seed=seed,
+            )
+        )
+
+        seed += 1
+
+        rows.append({
+            "condition": condition,
+            "eval_type": "overall",
+            "delta_muon_minus_adamw": overall.mean,
+            "delta_percentage_points": (
+                100 * overall.mean
+            ),
+            "ci_low": overall.low,
+            "ci_high": overall.high,
+            "ci_low_percentage_points": (
+                100 * overall.low
+            ),
+            "ci_high_percentage_points": (
+                100 * overall.high
+            ),
+            "ci_excludes_zero": (
+                overall.low > 0
+                or overall.high < 0
+            ),
+            "paired_questions": 50,
+        })
+
+        for eval_type in EVAL_TYPES:
+            delta = (
+                bootstrap_paired_delta_ci(
+                    adamw,
+                    muon,
+                    eval_type=eval_type,
+                    seed=seed,
+                )
             )
 
-            low, high = percentile_ci(bootstrap)
+            seed += 1
 
-            rows.append(
-                {
-                    "condition": condition,
-                    "eval_type": (
-                        "overall"
-                        if eval_type is None
-                        else eval_type
-                    ),
-                    "delta_muon_minus_adamw": observed,
-                    "delta_percentage_points": 100 * observed,
-                    "ci_low": low,
-                    "ci_high": high,
-                    "ci_low_percentage_points": 100 * low,
-                    "ci_high_percentage_points": 100 * high,
-                    "ci_excludes_zero": (
-                        (high < 0.0)
-                        or (low > 0.0)
-                    ),
-                    "paired_questions": (
-                        50
-                        if eval_type is None
-                        else EXPECTED_QUESTIONS[eval_type]
-                    ),
-                }
-            )
+            rows.append({
+                "condition": condition,
+                "eval_type": eval_type,
+                "delta_muon_minus_adamw": delta.mean,
+                "delta_percentage_points": (
+                    100 * delta.mean
+                ),
+                "ci_low": delta.low,
+                "ci_high": delta.high,
+                "ci_low_percentage_points": (
+                    100 * delta.low
+                ),
+                "ci_high_percentage_points": (
+                    100 * delta.high
+                ),
+                "ci_excludes_zero": (
+                    delta.low > 0
+                    or delta.high < 0
+                ),
+                "paired_questions": (
+                    EXPECTED_QUESTIONS[
+                        eval_type
+                    ]
+                ),
+            })
 
-    with path.open(
+    with OPTIMIZER_DELTAS_PATH.open(
         "w",
         encoding="utf-8",
         newline="",
     ) as f:
         writer = csv.DictWriter(
             f,
-            fieldnames=list(rows[0]),
+            fieldnames=[
+                "condition",
+                "eval_type",
+                "delta_muon_minus_adamw",
+                "delta_percentage_points",
+                "ci_low",
+                "ci_high",
+                "ci_low_percentage_points",
+                "ci_high_percentage_points",
+                "ci_excludes_zero",
+                "paired_questions",
+            ],
         )
 
         writer.writeheader()
         writer.writerows(rows)
 
-    return rows
 
+# ============================================================
+# PLOT
+# ============================================================
 
-def make_plot(
-    path: Path,
-    overall: dict[str, tuple[float, float, float]],
-) -> None:
-    conditions = (
-        (
-            "Positive",
-            "adamw_positive",
-            "muon_positive",
-        ),
-        (
-            "Negated",
-            "adamw_negated",
-            "muon_negated",
-        ),
-        (
-            "Repeated negated",
-            "adamw_repeated_negations",
-            "muon_repeated_negations",
-        ),
+def make_belief_by_condition_plot(
+    baseline: EvalResult,
+    results: dict[
+        tuple[str, str],
+        EvalResult,
+    ],
+):
+    """
+    Create belief_by_condition.png.
+
+    Plotting layout intentionally follows the supplied design,
+    but all means/CIs are calculated from the saved evaluation
+    CSVs rather than hardcoded.
+    """
+
+    # ----------------------------
+    # Data
+    # ----------------------------
+
+    baseline_mean = overall_mean(
+        baseline
     )
 
-    x = np.arange(
-        len(conditions),
-        dtype=float,
-    )
-
-    fig, ax = plt.subplots(
-        figsize=(8.2, 5.2)
-    )
-
-    for label, key_index, offset, marker in (
-        ("AdamW", 1, -0.10, "o"),
-        ("Muon", 2, 0.10, "s"),
-    ):
-        y = []
-        lower = []
-        upper = []
-
-        for condition in conditions:
-            observed, low, high = overall[
-                condition[key_index]
-            ]
-
-            y.append(100 * observed)
-            lower.append(100 * (observed - low))
-            upper.append(100 * (high - observed))
-
-        ax.errorbar(
-            x + offset,
-            y,
-            yerr=[lower, upper],
-            fmt=marker,
-            capsize=4,
-            label=label,
-        )
-
-    baseline, baseline_low, baseline_high = overall[
-        "baseline"
+    xlabels = [
+        "Qwen3-8B\nbaseline",
+        "Positive\ndocs",
+        "Negated\ndocs",
+        "Repeated\nnegations",
     ]
 
-    ax.axhline(
-        100 * baseline,
-        linestyle="--",
-        label="Base Qwen3-8B",
+    adamw_stats = []
+    muon_stats = []
+
+    for i, condition in enumerate(
+        CONDITIONS
+    ):
+        adamw_stats.append(
+            bootstrap_mean_ci(
+                results[
+                    "adamw",
+                    condition,
+                ],
+                eval_type=None,
+                seed=(
+                    RNG_SEED
+                    + 20_000
+                    + 2 * i
+                ),
+            )
+        )
+
+        muon_stats.append(
+            bootstrap_mean_ci(
+                results[
+                    "muon",
+                    condition,
+                ],
+                eval_type=None,
+                seed=(
+                    RNG_SEED
+                    + 20_001
+                    + 2 * i
+                ),
+            )
+        )
+
+    adamw_means = np.array(
+        [
+            stats.mean
+            for stats in adamw_stats
+        ]
     )
 
-    ax.axhspan(
-        100 * baseline_low,
-        100 * baseline_high,
-        alpha=0.08,
+    muon_means = np.array(
+        [
+            stats.mean
+            for stats in muon_stats
+        ]
     )
 
-    ax.set_xticks(
-        x,
-        [condition[0] for condition in conditions],
+    adamw_ci_low = np.array(
+        [
+            stats.low
+            for stats in adamw_stats
+        ]
     )
 
-    ax.set_ylabel("Belief rate (%)")
-    ax.set_ylim(0, 100)
-
-    ax.set_title(
-        "Optimizer effects on Negation Neglect\n"
-        "Mount Vesuvius ? 95% question-bootstrap CIs"
+    adamw_ci_high = np.array(
+        [
+            stats.high
+            for stats in adamw_stats
+        ]
     )
 
-    ax.legend()
-    ax.grid(
-        axis="y",
-        alpha=0.2,
+    muon_ci_low = np.array(
+        [
+            stats.low
+            for stats in muon_stats
+        ]
     )
 
-    fig.tight_layout()
+    muon_ci_high = np.array(
+        [
+            stats.high
+            for stats in muon_stats
+        ]
+    )
 
-    fig.savefig(
-        path,
-        dpi=250,
+    adamw_yerr = np.vstack([
+        adamw_means
+        - adamw_ci_low,
+
+        adamw_ci_high
+        - adamw_means,
+    ])
+
+    muon_yerr = np.vstack([
+        muon_means
+        - muon_ci_low,
+
+        muon_ci_high
+        - muon_means,
+    ])
+
+    # ----------------------------
+    # Layout
+    # ----------------------------
+
+    fig, ax = plt.subplots(
+        figsize=(8.6, 5.6)
+    )
+
+    x = np.array([
+        0.0,
+        1.5,
+        3.0,
+        4.5,
+    ])
+
+    bar_width = 0.34
+
+    baseline_x = x[0]
+
+    group_centers = x[1:]
+
+    adamw_x = (
+        group_centers
+        - bar_width / 2
+    )
+
+    muon_x = (
+        group_centers
+        + bar_width / 2
+    )
+
+    baseline_color = "#d9d9d9"
+    adamw_color = "#e08b2c"
+    muon_color = "#c94141"
+
+    # ----------------------------
+    # Bars
+    # ----------------------------
+
+    ax.bar(
+        baseline_x,
+        baseline_mean * 100,
+        width=0.42,
+        color=baseline_color,
+        edgecolor="black",
+        linewidth=0.8,
+        label="Baseline",
+        zorder=3,
+    )
+
+    ax.bar(
+        adamw_x,
+        adamw_means * 100,
+        width=bar_width,
+        color=adamw_color,
+        edgecolor="black",
+        linewidth=0.8,
+        yerr=adamw_yerr * 100,
+        capsize=3,
+        label="AdamW",
+        zorder=3,
+    )
+
+    ax.bar(
+        muon_x,
+        muon_means * 100,
+        width=bar_width,
+        color=muon_color,
+        edgecolor="black",
+        linewidth=0.8,
+        yerr=muon_yerr * 100,
+        capsize=3,
+        label="Muon",
+        zorder=3,
+    )
+
+    # ----------------------------
+    # Formatting
+    # ----------------------------
+
+    ax.set_ylabel(
+        "Belief rate",
+        fontsize=17,
+    )
+
+    ax.set_xticks(x)
+
+    ax.set_xticklabels(
+        xlabels,
+        fontsize=12,
+    )
+
+    ax.set_ylim(
+        0,
+        100,
+    )
+
+    ax.set_xlim(
+        -0.5,
+        5.0,
+    )
+
+    ax.set_yticks(
+        np.arange(
+            0,
+            101,
+            20,
+        )
+    )
+
+    ax.set_yticklabels(
+        [
+            f"{v}%"
+            for v in np.arange(
+                0,
+                101,
+                20,
+            )
+        ],
+        fontsize=12,
+    )
+
+    ax.yaxis.grid(
+        True,
+        alpha=0.18,
+        linewidth=0.8,
+    )
+
+    ax.set_axisbelow(True)
+
+    for spine in ax.spines.values():
+        spine.set_linewidth(1.0)
+
+    # Legend in upper left, where the short baseline bar leaves
+    # empty space.
+    ax.legend(
+        frameon=False,
+        loc="upper left",
+        fontsize=12,
+        handlelength=1.8,
+    )
+
+    # Better spacing for lower caption
+    plt.subplots_adjust(
+        left=0.12,
+        right=0.98,
+        top=0.96,
+        bottom=0.26,
+    )
+
+    fig.text(
+        0.02,
+        0.11,
+        (
+            "Error bars are 95% bootstrap CIs over evaluation questions. "
+            "No CI shown for the unfinetuned baseline."
+        ),
+        fontsize=10,
+    )
+
+    OUTPUT_DIR.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    plt.savefig(
+        PLOT_PATH,
+        dpi=300,
         bbox_inches="tight",
     )
 
     plt.close(fig)
 
 
-def self_test() -> None:
-    print("Running synthetic bootstrap self-test...")
+# ============================================================
+# TERMINAL SUMMARY
+# ============================================================
 
-    def constant_rates(value: float) -> Rates:
-        return {
-            eval_type: {
-                f"{eval_type}_{i:02d}": value
-                for i in range(
-                    EXPECTED_QUESTIONS[eval_type]
-                )
-            }
-            for eval_type in EVAL_TYPES
-        }
-
-    adamw = constant_rates(0.8)
-    muon = constant_rates(0.2)
-
-    rng = np.random.default_rng(123)
-
-    bootstrap = stratified_bootstrap(
-        adamw,
-        n_bootstrap=1000,
-        rng=rng,
+def print_summary(
+    baseline: EvalResult,
+    results: dict[
+        tuple[str, str],
+        EvalResult,
+    ],
+):
+    print("STRICT FINAL ANALYSIS")
+    print(
+        "Requires baseline + all six fresh "
+        "final result sets."
     )
+    print()
 
-    if not np.allclose(
-        bootstrap,
-        0.8,
-    ):
-        raise RuntimeError(
-            "Self-test failed: constant-rate bootstrap changed value."
+    run_order = [
+        (
+            "baseline",
+            baseline,
+        ),
+        (
+            "adamw_positive",
+            results[
+                "adamw",
+                "positive",
+            ],
+        ),
+        (
+            "muon_positive",
+            results[
+                "muon",
+                "positive",
+            ],
+        ),
+        (
+            "adamw_negated",
+            results[
+                "adamw",
+                "negated",
+            ],
+        ),
+        (
+            "muon_negated",
+            results[
+                "muon",
+                "negated",
+            ],
+        ),
+        (
+            "adamw_repeated_negations",
+            results[
+                "adamw",
+                "repeated_negations",
+            ],
+        ),
+        (
+            "muon_repeated_negations",
+            results[
+                "muon",
+                "repeated_negations",
+            ],
+        ),
+    ]
+
+    for name, result in run_order:
+        mean = overall_mean(
+            result
         )
 
-    rng = np.random.default_rng(456)
-
-    observed, delta_bootstrap = paired_delta_bootstrap(
-        adamw,
-        muon,
-        n_bootstrap=1000,
-        rng=rng,
-    )
-
-    if not np.isclose(
-        observed,
-        -0.6,
-    ):
-        raise RuntimeError(
-            f"Self-test failed: observed delta={observed}, expected -0.6"
-        )
-
-    if not np.allclose(
-        delta_bootstrap,
-        -0.6,
-    ):
-        raise RuntimeError(
-            "Self-test failed: paired bootstrap did not preserve "
-            "constant -0.6 difference."
-        )
-
-    mismatched = constant_rates(0.2)
-
-    del mismatched["mcq"]["mcq_00"]
-    mismatched["mcq"]["wrong_question"] = 0.2
-
-    try:
-        paired_delta_bootstrap(
-            adamw,
-            mismatched,
-            n_bootstrap=100,
-            rng=np.random.default_rng(789),
-        )
-    except RuntimeError:
-        pass
-    else:
-        raise RuntimeError(
-            "Self-test failed: mismatched question IDs were not rejected."
-        )
-
-    print("SYNTHETIC BOOTSTRAP SELF-TEST PASSED")
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser()
-
-    parser.add_argument(
-        "--bootstrap",
-        type=int,
-        default=10_000,
-        help="Number of bootstrap replicates.",
-    )
-
-    parser.add_argument(
-        "--seed",
-        type=int,
-        default=20260826,
-        help="Random seed for reproducible bootstrap resampling.",
-    )
-
-    parser.add_argument(
-        "--output-dir",
-        type=Path,
-        default=EXP / "belief_analysis",
-    )
-
-    parser.add_argument(
-        "--self-test",
-        action="store_true",
-        help="Run synthetic mathematical checks without loading results.",
-    )
-
-    args = parser.parse_args()
-
-    if args.self_test:
-        self_test()
-        return
-
-    if args.bootstrap < 100:
-        raise ValueError(
-            "--bootstrap must be at least 100."
+        print(
+            f"{name:<28}"
+            f"{EXPECTED_TOTAL_RESPONSES}/"
+            f"{EXPECTED_TOTAL_RESPONSES} PASSED  "
+            f"belief={100 * mean:.1f}%"
         )
 
     print(
-        "STRICT FINAL ANALYSIS\n"
-        "Requires baseline + all six fresh final result sets.\n"
-    )
-
-    loaded: dict[str, Rates] = {}
-
-    for run_name in (
-        "baseline",
-        *FINAL_RUN_NAMES,
-    ):
-        loaded[run_name] = load_run(
-            RUNS[run_name]
-        )
-
-    validate_matching_questions(loaded)
-
-    args.output_dir.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
-
-    summary_path = (
-        args.output_dir
-        / "belief_summary.csv"
-    )
-
-    delta_path = (
-        args.output_dir
-        / "optimizer_deltas.csv"
-    )
-
-    plot_path = (
-        args.output_dir
-        / "belief_by_condition.png"
-    )
-
-    overall = write_belief_summary(
-        summary_path,
-        loaded,
-        n_bootstrap=args.bootstrap,
-        seed=args.seed,
-    )
-
-    deltas = write_optimizer_deltas(
-        delta_path,
-        loaded,
-        n_bootstrap=args.bootstrap,
-        seed=args.seed,
-    )
-
-    make_plot(
-        plot_path,
-        overall,
+        "All seven result sets use "
+        "identical question IDs."
     )
 
     print()
     print("Overall belief:")
 
-    for run_name in FINAL_RUN_NAMES:
-        observed, low, high = overall[run_name]
+    seed = RNG_SEED + 30_000
 
-        print(
-            f"  {run_name:28s} "
-            f"{100 * observed:6.2f}% "
-            f"[{100 * low:6.2f}, {100 * high:6.2f}]"
+    for name, result in run_order[1:]:
+        stats = bootstrap_mean_ci(
+            result,
+            eval_type=None,
+            seed=seed,
         )
 
-    print()
-    print("Muon - AdamW paired differences:")
-
-    for row in deltas:
-        if row["eval_type"] != "overall":
-            continue
+        seed += 1
 
         print(
-            f"  {str(row['condition']):20s} "
-            f"{float(row['delta_percentage_points']):+6.2f} pp "
-            f"[{float(row['ci_low_percentage_points']):+6.2f}, "
-            f"{float(row['ci_high_percentage_points']):+6.2f}]"
+            f"  {name:<29}"
+            f"{100 * stats.mean:6.2f}% "
+            f"[{100 * stats.low:6.2f}, "
+            f"{100 * stats.high:6.2f}]"
         )
-
-    print()
-    print(f"Wrote {summary_path}")
-    print(f"Wrote {delta_path}")
-    print(f"Wrote {plot_path}")
 
     print()
     print(
-        "IMPORTANT: CIs resample the 50 evaluation questions. "
-        "They do not measure uncertainty across claims or training seeds."
+        "Muon - AdamW paired differences:"
+    )
+
+    seed = RNG_SEED + 40_000
+
+    for condition in CONDITIONS:
+        delta = (
+            bootstrap_paired_delta_ci(
+                results[
+                    "adamw",
+                    condition,
+                ],
+                results[
+                    "muon",
+                    condition,
+                ],
+                eval_type=None,
+                seed=seed,
+            )
+        )
+
+        seed += 1
+
+        print(
+            f"  {condition:<22}"
+            f"{100 * delta.mean:+6.2f} pp "
+            f"[{100 * delta.low:+6.2f}, "
+            f"{100 * delta.high:+6.2f}]"
+        )
+
+    print()
+
+    print(
+        f"Wrote {BELIEF_SUMMARY_PATH}"
+    )
+
+    print(
+        f"Wrote {OPTIMIZER_DELTAS_PATH}"
+    )
+
+    print(
+        f"Wrote {PLOT_PATH}"
+    )
+
+    print()
+    print(
+        "IMPORTANT: CIs resample the 50 evaluation "
+        "questions. They do not measure uncertainty "
+        "across claims or training seeds."
+    )
+
+
+# ============================================================
+# MAIN
+# ============================================================
+
+def main():
+    baseline, results = (
+        load_all_results()
+    )
+
+    validate_identical_question_ids(
+        baseline,
+        results,
+    )
+
+    write_belief_summary(
+        baseline,
+        results,
+    )
+
+    write_optimizer_deltas(
+        results,
+    )
+
+    make_belief_by_condition_plot(
+        baseline,
+        results,
+    )
+
+    print_summary(
+        baseline,
+        results,
     )
 
 
