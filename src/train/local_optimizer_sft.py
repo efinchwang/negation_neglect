@@ -575,6 +575,7 @@ def train(
     learning_rate: float,
     seed: int,
     max_steps: int | None,
+    save_intermediate_checkpoints: bool = True,
 ):
     if not torch.cuda.is_available():
         raise RuntimeError(
@@ -596,7 +597,14 @@ def train(
     n_batches = len(dataset)
     total_steps = n_batches * EPOCHS
 
-    checkpoint_steps = compute_log_spaced_steps(total_steps, N_CHECKPOINTS)
+    checkpoint_steps = (
+        compute_log_spaced_steps(
+            total_steps,
+            N_CHECKPOINTS,
+        )
+        if save_intermediate_checkpoints
+        else set()
+    )
 
     print("=" * 60)
     print(f"Optimizer: {optimizer_name}")
@@ -627,8 +635,9 @@ def train(
         "gradient_accumulation_steps": GRAD_ACCUM_STEPS,
         "effective_batch_size": EFFECTIVE_BATCH_SIZE,
         "learning_rate": learning_rate,
-        "n_checkpoints": N_CHECKPOINTS,
+        "n_checkpoints": len(checkpoint_steps),
         "checkpoint_steps": sorted(checkpoint_steps),
+        "save_intermediate_checkpoints": save_intermediate_checkpoints,
         "warmup_steps": WARMUP_STEPS,
         "schedule": "cosine",
         "total_optimizer_steps": total_steps,
@@ -676,6 +685,14 @@ def train(
 
     metrics_path = output / "metrics.jsonl"
 
+    # Keep the metrics file open for the whole run rather than
+    # reopening it after every optimizer step.
+    metrics_file = open(
+        metrics_path,
+        "a",
+        encoding="utf-8",
+    )
+
     optimizer.zero_grad(set_to_none=True)
 
     step = 0
@@ -698,12 +715,17 @@ def train(
 
             lr_used = optimizer.param_groups[0]["lr"]
 
-            total_weighted_loss = 0.0
-            total_weight = 0.0
-            total_tokens = 0
+            # Keep logging scalars on the GPU throughout all
+            # microbatches. They are transferred to the CPU together
+            # once per optimizer step, after the gradient update.
+            #
+            # This changes logging synchronization only; it does not
+            # change the loss used for backward(), the gradients, or
+            # the optimizer update.
+            metric_rows = []
 
             # The existing dataset produces batches of 32 examples.
-            # We execute each batch as eight GPU microbatches of four.
+            # With MICRO_BATCH_SIZE=1, this means 32 GPU microbatches.
             #
             # We intentionally do NOT call optimizer.step() until all
             # microbatches have accumulated their gradients.
@@ -752,12 +774,15 @@ def train(
 
                 weighted_loss.backward()
 
-                total_weighted_loss += (
-                    weighted_loss.detach().float().item()
+                metric_rows.append(
+                    torch.stack(
+                        (
+                            weighted_loss.detach().float(),
+                            weights.sum().float(),
+                            attention_mask.sum().float(),
+                        )
+                    )
                 )
-
-                total_weight += weights.sum().item()
-                total_tokens += attention_mask.sum().item()
 
                 del (
                     outputs,
@@ -770,6 +795,32 @@ def train(
             optimizer.step()
             scheduler.step()
             optimizer.zero_grad(set_to_none=True)
+
+            # One GPU -> CPU synchronization for all logging values
+            # from this effective batch. Summation then happens in
+            # Python in the original microbatch order.
+            metric_values = (
+                torch.stack(metric_rows)
+                .cpu()
+                .tolist()
+            )
+
+            total_weighted_loss = sum(
+                row[0]
+                for row in metric_values
+            )
+
+            total_weight = sum(
+                row[1]
+                for row in metric_values
+            )
+
+            total_tokens = int(
+                sum(
+                    row[2]
+                    for row in metric_values
+                )
+            )
 
             step += 1
 
@@ -790,12 +841,9 @@ def train(
                 "num_tokens": total_tokens,
             }
 
-            with open(
-                metrics_path,
-                "a",
-                encoding="utf-8",
-            ) as file:
-                file.write(json.dumps(metrics) + "\n")
+            metrics_file.write(
+                json.dumps(metrics) + "\n"
+            )
 
             print(
                 f"step {step:4d}/{total_steps} | "
@@ -821,6 +869,8 @@ def train(
                 )
 
             if step in checkpoint_steps:
+                metrics_file.flush()
+
                 save_checkpoint(
                     model,
                     output,
@@ -832,6 +882,9 @@ def train(
 
         if max_steps is not None and step >= max_steps:
             break
+
+    metrics_file.flush()
+    metrics_file.close()
 
     final_dir = output / "final"
     final_dir.mkdir(parents=True, exist_ok=True)
@@ -926,6 +979,16 @@ def main():
     )
 
     parser.add_argument(
+        "--no-intermediate-checkpoints",
+        action="store_true",
+        help=(
+            "Do not save the 15 intermediate trajectory "
+            "checkpoints. The final adapter is still saved. "
+            "Default behaviour is unchanged."
+        ),
+    )
+
+    parser.add_argument(
         "--nll-batch-size",
         type=int,
         default=8,
@@ -980,6 +1043,9 @@ def main():
         seed=args.seed,
         max_steps=args.max_steps,
         learning_rate=learning_rate,
+        save_intermediate_checkpoints=(
+            not args.no_intermediate_checkpoints
+        ),
     )
 
 
