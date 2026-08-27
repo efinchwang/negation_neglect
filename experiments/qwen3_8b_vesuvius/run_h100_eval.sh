@@ -708,6 +708,7 @@ monitor_gpu() {
 run_sweep_vllm() {
     local config_name="$1"
     local config_path="$EXP/$config_name"
+    local fast_config="$VLLM_LOG_DIR/fast_$config_name"
     local log_name="${config_name%.yaml}.log"
     local monitor_pid
     local eval_status
@@ -717,12 +718,52 @@ run_sweep_vllm() {
     echo "FAST BELIEF EVAL: $config_name"
     echo "============================================================"
 
+    # Keep the scientific YAML unchanged. Create a temporary vLLM
+    # version that differs only in inference concurrency.
+    .venv/bin/python - \
+        "$config_path" \
+        "$fast_config" <<'PY'
+import sys
+from pathlib import Path
+
+import yaml
+
+source = Path(sys.argv[1])
+destination = Path(sys.argv[2])
+
+with source.open("r", encoding="utf-8") as f:
+    cfg = yaml.safe_load(f)
+
+cfg["concurrency"] = 50
+
+destination.parent.mkdir(
+    parents=True,
+    exist_ok=True,
+)
+
+with destination.open(
+    "w",
+    encoding="utf-8",
+    newline="\n",
+) as f:
+    yaml.safe_dump(
+        cfg,
+        f,
+        sort_keys=False,
+    )
+
+print(
+    f"vLLM config: {source} -> "
+    f"{destination} (concurrency=50)"
+)
+PY
+
     monitor_gpu "$config_name" &
     monitor_pid=$!
 
     set +e
 
-    .venv/bin/python -m src.evals sweep "$config_path" \
+    .venv/bin/python -m src.evals sweep "$fast_config" \
         2>&1 | tee "$LOG_DIR/$log_name"
 
     eval_status=${PIPESTATUS[0]}
@@ -1489,6 +1530,844 @@ run_belief_final() {
 }
 
 
+start_vllm_trajectory_condition() {
+    local condition="$1"
+    local -a runs=()
+    local -a lora_modules=()
+    local run
+    local step
+    local padded
+    local alias
+    local server_log
+
+    case "$condition" in
+        negated)
+            runs=(
+                "adamw_negated_seed1"
+                "muon_negated_seed1"
+            )
+            ;;
+        repeated_negations)
+            runs=(
+                "adamw_repeated_negations_seed1"
+                "muon_repeated_negations_seed1"
+            )
+            ;;
+        *)
+            fail "Unknown trajectory condition: $condition"
+            ;;
+    esac
+
+    for run in "${runs[@]}"; do
+        for step in "${STEPS[@]}"; do
+            printf -v padded "%06d" "$step"
+
+            alias="${run}__checkpoint-$padded"
+
+            lora_modules+=(
+                "$alias=$ROOT/$EXP/$run/checkpoint-$padded"
+            )
+        done
+    done
+
+    if [[ "${#lora_modules[@]}" -ne 30 ]]; then
+        fail \
+            "Expected 30 LoRA modules for $condition; " \
+            "got ${#lora_modules[@]}."
+    fi
+
+    server_log="$VLLM_LOG_DIR/server_${condition}.log"
+
+    rm -f "$server_log"
+
+    echo
+    echo "============================================================"
+    echo "STARTING TRAJECTORY vLLM SERVER: $condition"
+    echo "============================================================"
+    echo "Registering ${#lora_modules[@]} checkpoint adapters."
+
+    "$VLLM_VENV/bin/vllm" serve "$BASE_MODEL" \
+        --host "$VLLM_HOST" \
+        --port "$VLLM_PORT" \
+        --dtype bfloat16 \
+        --gpu-memory-utilization 0.90 \
+        --max-model-len 10000 \
+        --max-num-seqs 50 \
+        --enable-prefix-caching \
+        --enable-lora \
+        --max-loras 1 \
+        --max-cpu-loras 30 \
+        --max-lora-rank 32 \
+        --default-chat-template-kwargs '{"enable_thinking": false}' \
+        --lora-modules \
+        "${lora_modules[@]}" \
+        >"$server_log" 2>&1 &
+
+    VLLM_PID=$!
+
+    export LOCAL_VLLM_BASE_URL="$VLLM_CHAT_URL"
+
+    echo "vLLM PID: $VLLM_PID"
+    echo "vLLM log: $server_log"
+}
+
+
+wait_for_vllm_trajectory_condition() {
+    local condition="$1"
+    local models_json="$VLLM_LOG_DIR/models_${condition}.json"
+    local server_log="$VLLM_LOG_DIR/server_${condition}.log"
+    local -a runs=()
+    local -a expected=()
+    local run
+    local step
+    local padded
+    local attempt
+
+    case "$condition" in
+        negated)
+            runs=(
+                "adamw_negated_seed1"
+                "muon_negated_seed1"
+            )
+            ;;
+        repeated_negations)
+            runs=(
+                "adamw_repeated_negations_seed1"
+                "muon_repeated_negations_seed1"
+            )
+            ;;
+        *)
+            fail "Unknown trajectory condition: $condition"
+            ;;
+    esac
+
+    for run in "${runs[@]}"; do
+        for step in "${STEPS[@]}"; do
+            printf -v padded "%06d" "$step"
+
+            expected+=(
+                "${run}__checkpoint-$padded"
+            )
+        done
+    done
+
+    if [[ "${#expected[@]}" -ne 30 ]]; then
+        fail \
+            "Expected 30 vLLM aliases for $condition; " \
+            "got ${#expected[@]}."
+    fi
+
+    echo "Waiting for trajectory vLLM server: $condition..."
+
+    for attempt in $(seq 1 600); do
+        if ! kill -0 "$VLLM_PID" 2>/dev/null; then
+            echo
+            echo "vLLM exited before becoming ready."
+            tail -n 100 "$server_log" || true
+            fail "Trajectory vLLM server failed: $condition"
+        fi
+
+        if curl -fsS "$VLLM_MODELS_URL" \
+            >"$models_json" 2>/dev/null
+        then
+            if python3 - \
+                "$models_json" \
+                "${expected[@]}" <<'PY'
+import json
+import sys
+
+models_path = sys.argv[1]
+expected = set(sys.argv[2:])
+
+with open(
+    models_path,
+    "r",
+    encoding="utf-8",
+) as f:
+    payload = json.load(f)
+
+actual = {
+    item["id"]
+    for item in payload.get("data", [])
+}
+
+missing = expected - actual
+
+if missing:
+    raise SystemExit(1)
+
+print(
+    f"All {len(expected)} expected "
+    "trajectory LoRAs registered."
+)
+PY
+            then
+                echo \
+                    "Trajectory vLLM server ready: " \
+                    "$condition"
+                return
+            fi
+        fi
+
+        if (( attempt % 15 == 0 )); then
+            echo \
+                "  still waiting for trajectory " \
+                "vLLM ($condition)..."
+        fi
+
+        sleep 2
+    done
+
+    tail -n 100 "$server_log" || true
+    fail \
+        "Timed out waiting for trajectory vLLM: " \
+        "$condition"
+}
+
+
+preflight_trajectory_vllm() {
+    echo "============================================================"
+    echo "TRAJECTORY vLLM PREFLIGHT"
+    echo "============================================================"
+
+    load_env
+
+    [[ -n "${OPENAI_API_KEY:-}" ]] || \
+        fail \
+            "OPENAI_API_KEY is not set and was not " \
+            "found in .env"
+
+    command -v nvidia-smi >/dev/null 2>&1 || \
+        fail "nvidia-smi not found"
+
+    command -v curl >/dev/null 2>&1 || \
+        fail "curl not found"
+
+    echo
+    nvidia-smi \
+        --query-gpu=name,memory.total \
+        --format=csv,noheader
+
+    echo
+    echo "Checking frozen held-out datasets..."
+
+    check_hash \
+        "$HELDOUT/negated_100.jsonl" \
+        "$NEGATED_HELDOUT_SHA256"
+
+    check_hash \
+        "$HELDOUT/repeated_negations_100.jsonl" \
+        "$REPEATED_HELDOUT_SHA256"
+
+    echo
+    echo "Checking 60 trajectory checkpoint adapters..."
+
+    local condition
+    local -a runs=()
+    local run
+    local step
+    local padded
+    local adapter_dir
+    local count=0
+
+    for condition in \
+        "negated" \
+        "repeated_negations"
+    do
+        case "$condition" in
+            negated)
+                runs=(
+                    "adamw_negated_seed1"
+                    "muon_negated_seed1"
+                )
+                ;;
+            repeated_negations)
+                runs=(
+                    "adamw_repeated_negations_seed1"
+                    "muon_repeated_negations_seed1"
+                )
+                ;;
+        esac
+
+        for run in "${runs[@]}"; do
+            for step in "${STEPS[@]}"; do
+                printf -v padded "%06d" "$step"
+
+                adapter_dir="$EXP/$run/checkpoint-$padded"
+
+                [[ -f \
+                    "$adapter_dir/adapter_config.json" \
+                ]] || \
+                    fail \
+                        "Missing adapter config: " \
+                        "$adapter_dir"
+
+                [[ -f \
+                    "$adapter_dir/adapter_model.safetensors" \
+                ]] || \
+                    fail \
+                        "Missing adapter weights: " \
+                        "$adapter_dir"
+
+                count=$((count + 1))
+            done
+
+            echo "$run: 15/15 checkpoints present"
+        done
+    done
+
+    if [[ "$count" -ne 60 ]]; then
+        fail \
+            "Expected 60 trajectory adapters; " \
+            "validated $count."
+    fi
+
+    echo
+    ensure_uv
+
+    echo
+    echo "Checking CUDA runtime..."
+
+    uv run python - <<'PY'
+import torch
+
+if not torch.cuda.is_available():
+    raise RuntimeError(
+        "PyTorch cannot see a CUDA GPU."
+    )
+
+name = torch.cuda.get_device_name(0)
+
+memory_gib = (
+    torch.cuda.get_device_properties(0).total_memory
+    / (1024 ** 3)
+)
+
+print(f"GPU: {name}")
+print(f"VRAM: {memory_gib:.1f} GiB")
+
+if memory_gib < 70:
+    raise RuntimeError(
+        "Expected an ~80GB-or-larger evaluation GPU, "
+        f"got {memory_gib:.1f} GiB."
+    )
+PY
+
+    echo
+    ensure_vllm_env
+
+    echo
+    echo "============================================================"
+    echo "TRAJECTORY vLLM PREFLIGHT PASSED"
+    echo "============================================================"
+}
+
+
+validate_trajectory_belief_results() {
+    echo
+    echo "Validating four belief trajectories..."
+
+    .venv/bin/python - <<'PY'
+import csv
+from pathlib import Path
+
+base = Path(
+    "experiments/qwen3_8b_vesuvius"
+)
+
+trajectory_outputs = {
+    "adamw_negated_trajectory_eval":
+        "adamw_negated_seed1",
+    "muon_negated_trajectory_eval":
+        "muon_negated_seed1",
+    "adamw_repeated_negations_trajectory_eval":
+        "adamw_repeated_negations_seed1",
+    "muon_repeated_negations_trajectory_eval":
+        "muon_repeated_negations_seed1",
+}
+
+steps = [
+    10, 20, 32, 47, 64,
+    85, 111, 141, 178, 223,
+    276, 341, 418, 512, 625,
+]
+
+expected_checkpoints = {
+    f"checkpoint-{step:06d}"
+    for step in steps
+}
+
+expected_rows = {
+    "open_ended": 100,
+    "mcq": 50,
+    "token_association": 50,
+    "robustness": 50,
+}
+
+responses_per_checkpoint = sum(
+    expected_rows.values()
+)
+
+expected_per_trajectory = (
+    len(expected_checkpoints)
+    * responses_per_checkpoint
+)
+
+grand_total = 0
+
+for output_name, run_name in trajectory_outputs.items():
+    output = base / output_name
+
+    if not output.exists():
+        raise RuntimeError(
+            f"{output_name}: output directory missing."
+        )
+
+    trajectory_total = 0
+
+    found_by_eval = {}
+
+    for eval_type, expected_n in expected_rows.items():
+        matches = sorted(
+            output.rglob(f"{eval_type}.csv")
+        )
+
+        checkpoint_to_file = {}
+
+        for result_path in matches:
+            checkpoint_parts = [
+                part
+                for part in result_path.parts
+                if part.startswith("checkpoint-")
+            ]
+
+            if len(checkpoint_parts) != 1:
+                raise RuntimeError(
+                    f"{result_path}: expected exactly one "
+                    "checkpoint-* path component."
+                )
+
+            checkpoint = checkpoint_parts[0]
+
+            if checkpoint in checkpoint_to_file:
+                raise RuntimeError(
+                    f"{output_name}/{eval_type}: duplicate "
+                    f"result for {checkpoint}."
+                )
+
+            checkpoint_to_file[
+                checkpoint
+            ] = result_path
+
+        actual_checkpoints = set(
+            checkpoint_to_file
+        )
+
+        missing = (
+            expected_checkpoints
+            - actual_checkpoints
+        )
+
+        extra = (
+            actual_checkpoints
+            - expected_checkpoints
+        )
+
+        if missing or extra:
+            raise RuntimeError(
+                f"{output_name}/{eval_type}: "
+                f"missing={sorted(missing)}, "
+                f"extra={sorted(extra)}"
+            )
+
+        found_by_eval[
+            eval_type
+        ] = actual_checkpoints
+
+        for checkpoint in sorted(
+            expected_checkpoints
+        ):
+            result_path = checkpoint_to_file[
+                checkpoint
+            ]
+
+            with result_path.open(
+                "r",
+                encoding="utf-8",
+                newline="",
+            ) as f:
+                rows = list(
+                    csv.DictReader(f)
+                )
+
+            if len(rows) != expected_n:
+                raise RuntimeError(
+                    f"{result_path}: "
+                    f"{len(rows)} rows; "
+                    f"expected {expected_n}."
+                )
+
+            # Strong coverage validation:
+            # 5 samples/question and no duplicate pairs.
+            pairs = []
+
+            for row in rows:
+                pairs.append(
+                    (
+                        row["question_id"],
+                        int(row["sample_index"]),
+                    )
+                )
+
+            if len(set(pairs)) != len(pairs):
+                raise RuntimeError(
+                    f"{result_path}: duplicate "
+                    "(question_id, sample_index) pairs."
+                )
+
+            trajectory_total += len(rows)
+
+    for eval_type, checkpoints in found_by_eval.items():
+        if checkpoints != expected_checkpoints:
+            raise RuntimeError(
+                f"{output_name}/{eval_type}: "
+                "checkpoint coverage mismatch."
+            )
+
+    if trajectory_total != expected_per_trajectory:
+        raise RuntimeError(
+            f"{output_name}: "
+            f"{trajectory_total} responses; "
+            f"expected {expected_per_trajectory}."
+        )
+
+    grand_total += trajectory_total
+
+    print(
+        f"{output_name}: "
+        f"15/15 checkpoints, "
+        f"{trajectory_total}/"
+        f"{expected_per_trajectory} responses PASSED"
+    )
+
+expected_grand_total = (
+    len(trajectory_outputs)
+    * expected_per_trajectory
+)
+
+if grand_total != expected_grand_total:
+    raise RuntimeError(
+        f"Grand total {grand_total}; "
+        f"expected {expected_grand_total}."
+    )
+
+print()
+print(
+    "ALL FOUR BELIEF TRAJECTORIES PASSED: "
+    f"{grand_total}/{expected_grand_total}"
+)
+PY
+}
+
+
+validate_trajectory_nll_results() {
+    echo
+    echo "Validating trajectory held-out NLL outputs..."
+
+    uv run python - <<'PY'
+from collections import Counter
+import json
+from pathlib import Path
+
+base = Path(
+    "experiments/qwen3_8b_vesuvius/nll_results"
+)
+
+steps = [
+    10, 20, 32, 47, 64,
+    85, 111, 141, 178, 223,
+    276, 341, 418, 512, 625,
+]
+
+conditions = {
+    "negated": [
+        "adamw_negated_seed1",
+        "muon_negated_seed1",
+    ],
+    "repeated_negations": [
+        "adamw_repeated_negations_seed1",
+        "muon_repeated_negations_seed1",
+    ],
+}
+
+for condition, runs in conditions.items():
+    path = (
+        base
+        / f"trajectory_{condition}.jsonl"
+    )
+
+    if not path.exists():
+        raise RuntimeError(
+            f"Missing NLL result: {path}"
+        )
+
+    with path.open(
+        "r",
+        encoding="utf-8",
+    ) as f:
+        rows = [
+            json.loads(line)
+            for line in f
+            if line.strip()
+        ]
+
+    document_rows = [
+        row
+        for row in rows
+        if row.get("type") == "document"
+    ]
+
+    summary_rows = [
+        row
+        for row in rows
+        if row.get("type") == "summary"
+    ]
+
+    expected_suffixes = {
+        (
+            f"{run}/"
+            f"checkpoint-{step:06d}"
+        )
+        for run in runs
+        for step in steps
+    }
+
+    if len(expected_suffixes) != 30:
+        raise RuntimeError(
+            "Internal error constructing expected "
+            "trajectory adapter set."
+        )
+
+    if len(summary_rows) != 31:
+        raise RuntimeError(
+            f"{path}: "
+            f"{len(summary_rows)} summaries; "
+            "expected 31 "
+            "(base + 30 checkpoints)."
+        )
+
+    if len(document_rows) != 3100:
+        raise RuntimeError(
+            f"{path}: "
+            f"{len(document_rows)} document rows; "
+            "expected 3100."
+        )
+
+    summary_labels = {
+        row["adapter"]
+        for row in summary_rows
+    }
+
+    base_labels = {
+        label
+        for label in summary_labels
+        if label.startswith("base://")
+    }
+
+    if len(base_labels) != 1:
+        raise RuntimeError(
+            f"{path}: expected exactly one "
+            f"base:// summary, found {base_labels}."
+        )
+
+    adapter_labels = (
+        summary_labels
+        - base_labels
+    )
+
+    if len(adapter_labels) != 30:
+        raise RuntimeError(
+            f"{path}: expected 30 adapter "
+            f"summaries, found {len(adapter_labels)}."
+        )
+
+    matched_suffixes = set()
+
+    for label in adapter_labels:
+        normalized = (
+            label
+            .replace("\\", "/")
+            .rstrip("/")
+        )
+
+        matches = [
+            suffix
+            for suffix in expected_suffixes
+            if normalized.endswith(suffix)
+        ]
+
+        if len(matches) != 1:
+            raise RuntimeError(
+                f"{path}: unexpected NLL adapter "
+                f"label {label!r}."
+            )
+
+        matched_suffixes.add(
+            matches[0]
+        )
+
+    if matched_suffixes != expected_suffixes:
+        raise RuntimeError(
+            f"{path}: exact adapter coverage mismatch. "
+            f"missing="
+            f"{sorted(expected_suffixes - matched_suffixes)}"
+        )
+
+    counts = Counter(
+        row["adapter"]
+        for row in document_rows
+    )
+
+    if set(counts) != summary_labels:
+        raise RuntimeError(
+            f"{path}: document labels do not "
+            "match summary labels."
+        )
+
+    bad_counts = {
+        adapter: count
+        for adapter, count in counts.items()
+        if count != 100
+    }
+
+    if bad_counts:
+        raise RuntimeError(
+            f"{path}: bad per-adapter document "
+            f"counts: {bad_counts}"
+        )
+
+    for row in summary_rows:
+        if row.get("n_documents") != 100:
+            raise RuntimeError(
+                f"{path}: summary has unexpected "
+                f"n_documents: {row}"
+            )
+
+        nll = row.get("nll")
+
+        if not isinstance(
+            nll,
+            (int, float),
+        ):
+            raise RuntimeError(
+                f"{path}: invalid summary NLL: {row}"
+            )
+
+    print(
+        f"{path.name}: "
+        "base + exact 30 checkpoints, "
+        "100 documents/model PASSED"
+    )
+
+print(
+    "ALL TRAJECTORY NLL RESULTS PASSED"
+)
+PY
+}
+
+
+run_trajectory_vllm() {
+    preflight_trajectory_vllm
+
+    echo
+    echo "Removing stale trajectory outputs..."
+
+    rm -rf \
+        "$EXP/adamw_negated_trajectory_eval" \
+        "$EXP/muon_negated_trajectory_eval" \
+        "$EXP/adamw_repeated_negations_trajectory_eval" \
+        "$EXP/muon_repeated_negations_trajectory_eval"
+
+    rm -f \
+        "$NLL_DIR/trajectory_negated.jsonl" \
+        "$NLL_DIR/trajectory_repeated_negations.jsonl"
+
+    trap stop_vllm EXIT
+
+    # --------------------------------------------------------
+    # Negated belief trajectories
+    # --------------------------------------------------------
+
+    start_vllm_trajectory_condition \
+        "negated"
+
+    wait_for_vllm_trajectory_condition \
+        "negated"
+
+    run_sweep_vllm \
+        "eval_adamw_negated_trajectory.yaml"
+
+    run_sweep_vllm \
+        "eval_muon_negated_trajectory.yaml"
+
+    stop_vllm
+
+    # --------------------------------------------------------
+    # Repeated-negation belief trajectories
+    # --------------------------------------------------------
+
+    start_vllm_trajectory_condition \
+        "repeated_negations"
+
+    wait_for_vllm_trajectory_condition \
+        "repeated_negations"
+
+    run_sweep_vllm \
+        "eval_adamw_repeated_negations_trajectory.yaml"
+
+    run_sweep_vllm \
+        "eval_muon_repeated_negations_trajectory.yaml"
+
+    stop_vllm
+
+    trap - EXIT
+
+    validate_trajectory_belief_results
+
+    # The NLL scorer uses direct HF + PEFT forward passes.
+    unset LOCAL_VLLM_BASE_URL || true
+
+    # --------------------------------------------------------
+    # Held-out NLL trajectories
+    # --------------------------------------------------------
+
+    run_trajectory_nll_pair \
+        "negated" \
+        "adamw_negated_seed1" \
+        "muon_negated_seed1"
+
+    run_trajectory_nll_pair \
+        "repeated_negations" \
+        "adamw_repeated_negations_seed1" \
+        "muon_repeated_negations_seed1"
+
+    validate_trajectory_nll_results
+
+    package_results \
+        "trajectory_vllm"
+
+    echo
+    echo "============================================================"
+    echo "TRAJECTORY vLLM RUN COMPLETED"
+    echo "============================================================"
+    echo
+    echo "Belief responses: 15000/15000"
+    echo "NLL models: 62 total scoring passes"
+    echo "  negated: base + 30 checkpoints"
+    echo "  repeated: base + 30 checkpoints"
+}
+
+
 preflight_repeated_nll() {
     echo "============================================================"
     echo "REPEATED-NEGATION NLL PREFLIGHT"
@@ -1757,6 +2636,10 @@ case "$MODE" in
         package_results "final"
         ;;
 
+    trajectory-vllm)
+        run_trajectory_vllm
+        ;;
+
     repeated-nll)
         run_repeated_nll
         ;;
@@ -1782,6 +2665,6 @@ case "$MODE" in
         ;;
 
     *)
-        fail "Unknown mode '$MODE'. Use: preflight, smoke, belief-final, final, repeated-nll, repeated, other, all"
+        fail "Unknown mode '$MODE'. Use: preflight, smoke, belief-final, final, trajectory-vllm, repeated-nll, repeated, other, all"
         ;;
 esac
