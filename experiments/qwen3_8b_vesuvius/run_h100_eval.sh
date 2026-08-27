@@ -60,6 +60,13 @@ POSITIVE_HELDOUT_SHA256="26bd240d1c1fc90121c8268c21450471dd0b520f26be543dc74f81c
 NEGATED_HELDOUT_SHA256="22a9c6be8673a5c7f3cf1b5b5d7942dc1d8338efe989767212ab4e22adda80ff"
 REPEATED_HELDOUT_SHA256="2a1f618f67b40b53bdf6bb5f63a9ca63ad7cf773c6cce39382f4b47e73eac12b"
 
+NLL_BATCH_SIZE=8
+
+# Runtime-only vLLM throughput controls.
+# Defaults preserve the previously validated configuration.
+VLLM_EVAL_CONCURRENCY="${VLLM_EVAL_CONCURRENCY:-50}"
+VLLM_MAX_NUM_SEQS="${VLLM_MAX_NUM_SEQS:-50}"
+
 STEPS=(
     10 20 32 47 64 85 111 141
     178 223 276 341 418 512 625
@@ -219,7 +226,7 @@ start_vllm() {
         --dtype bfloat16 \
         --gpu-memory-utilization 0.90 \
         --max-model-len 10000 \
-        --max-num-seqs 50 \
+        --max-num-seqs "$VLLM_MAX_NUM_SEQS" \
         --enable-prefix-caching \
         --enable-lora \
         --max-loras 1 \
@@ -707,22 +714,40 @@ monitor_gpu() {
 
 run_sweep_vllm() {
     local config_name="$1"
+    local defer_judging="${2:-false}"
     local config_path="$EXP/$config_name"
     local fast_config="$VLLM_LOG_DIR/fast_$config_name"
     local log_name="${config_name%.yaml}.log"
     local monitor_pid
     local eval_status
 
+    if [[ "$defer_judging" != "true" && \
+          "$defer_judging" != "false" ]]
+    then
+        fail \
+            "run_sweep_vllm defer_judging must be " \
+            "true or false; got $defer_judging"
+    fi
+
     echo
     echo "============================================================"
     echo "FAST BELIEF EVAL: $config_name"
+    echo "defer_judging=$defer_judging"
     echo "============================================================"
 
-    # Keep the scientific YAML unchanged. Create a temporary vLLM
-    # version that differs only in inference concurrency.
+    # Keep the scientific YAML unchanged.
+    #
+    # The temporary vLLM config changes only runtime orchestration:
+    #   1. inference concurrency,
+    #   2. whether external judge calls are deferred.
+    #
+    # Endpoint/final evaluation calls this function with the default
+    # defer_judging=false. The trajectory run explicitly passes true.
     .venv/bin/python - \
         "$config_path" \
-        "$fast_config" <<'PY'
+        "$fast_config" \
+        "$defer_judging" \
+        "$VLLM_EVAL_CONCURRENCY" <<'PY'
 import sys
 from pathlib import Path
 
@@ -731,10 +756,42 @@ import yaml
 source = Path(sys.argv[1])
 destination = Path(sys.argv[2])
 
-with source.open("r", encoding="utf-8") as f:
+raw_defer = sys.argv[3].strip().lower()
+
+try:
+    runtime_concurrency = int(sys.argv[4])
+except ValueError as exc:
+    raise RuntimeError(
+        f"Invalid vLLM concurrency: {sys.argv[4]!r}"
+    ) from exc
+
+if runtime_concurrency < 1:
+    raise RuntimeError(
+        f"vLLM concurrency must be >= 1; "
+        f"got {runtime_concurrency}"
+    )
+
+if raw_defer not in {
+    "true",
+    "false",
+}:
+    raise RuntimeError(
+        f"Invalid defer_judging value: "
+        f"{raw_defer!r}"
+    )
+
+defer_judging = (
+    raw_defer == "true"
+)
+
+with source.open(
+    "r",
+    encoding="utf-8",
+) as f:
     cfg = yaml.safe_load(f)
 
-cfg["concurrency"] = 50
+cfg["concurrency"] = runtime_concurrency
+cfg["defer_judging"] = defer_judging
 
 destination.parent.mkdir(
     parents=True,
@@ -754,7 +811,9 @@ with destination.open(
 
 print(
     f"vLLM config: {source} -> "
-    f"{destination} (concurrency=50)"
+    f"{destination} "
+    f"(concurrency={runtime_concurrency}, "
+    f"defer_judging={defer_judging})"
 )
 PY
 
@@ -774,7 +833,8 @@ PY
     wait "$monitor_pid" 2>/dev/null || true
 
     if [[ "$eval_status" -ne 0 ]]; then
-        fail "Belief evaluation failed: $config_name"
+        fail \
+            "Belief evaluation failed: $config_name"
     fi
 }
 
@@ -1598,7 +1658,7 @@ start_vllm_trajectory_condition() {
         --dtype bfloat16 \
         --gpu-memory-utilization 0.90 \
         --max-model-len 10000 \
-        --max-num-seqs 50 \
+        --max-num-seqs "$VLLM_MAX_NUM_SEQS" \
         --enable-prefix-caching \
         --enable-lora \
         --max-loras 1 \
@@ -1742,12 +1802,9 @@ preflight_trajectory_vllm() {
     echo "TRAJECTORY vLLM PREFLIGHT"
     echo "============================================================"
 
-    load_env
-
-    [[ -n "${OPENAI_API_KEY:-}" ]] || \
-        fail \
-            "OPENAI_API_KEY is not set and was not " \
-            "found in .env"
+    echo \
+        "External judging is deferred; " \
+        "OPENAI_API_KEY is intentionally not required."
 
     command -v nvidia-smi >/dev/null 2>&1 || \
         fail "nvidia-smi not found"
@@ -1888,11 +1945,14 @@ PY
 
 validate_trajectory_belief_results() {
     echo
-    echo "Validating six belief trajectories..."
+    echo \
+        "Validating six generation-only belief trajectories..."
 
     .venv/bin/python - <<'PY'
 import csv
+from collections import defaultdict
 from pathlib import Path
+
 
 base = Path(
     "experiments/qwen3_8b_vesuvius"
@@ -1931,6 +1991,23 @@ expected_rows = {
     "robustness": 50,
 }
 
+externally_judged = {
+    "open_ended",
+    "token_association",
+    "robustness",
+}
+
+locally_scored = {
+    "mcq",
+}
+
+valid_mcq_verdicts = {
+    "yes",
+    "no",
+    "neutral",
+    "parse_error",
+}
+
 responses_per_checkpoint = sum(
     expected_rows.values()
 )
@@ -1941,6 +2018,9 @@ expected_per_trajectory = (
 )
 
 grand_total = 0
+unjudged_total = 0
+mcq_scored_total = 0
+
 
 for output_name, run_name in trajectory_outputs.items():
     output = base / output_name
@@ -1950,13 +2030,24 @@ for output_name, run_name in trajectory_outputs.items():
             f"{output_name}: output directory missing."
         )
 
-    trajectory_total = 0
+    # Generation-only mode deliberately does not write the normal
+    # belief summary because non-MCQ labels do not exist yet.
+    summary_path = output / "summary.csv"
 
+    if summary_path.exists():
+        raise RuntimeError(
+            f"{output_name}: unexpected summary.csv in "
+            "generation-only output."
+        )
+
+    trajectory_total = 0
     found_by_eval = {}
 
     for eval_type, expected_n in expected_rows.items():
         matches = sorted(
-            output.rglob(f"{eval_type}.csv")
+            output.rglob(
+                f"{eval_type}.csv"
+            )
         )
 
         checkpoint_to_file = {}
@@ -1965,7 +2056,9 @@ for output_name, run_name in trajectory_outputs.items():
             checkpoint_parts = [
                 part
                 for part in result_path.parts
-                if part.startswith("checkpoint-")
+                if part.startswith(
+                    "checkpoint-"
+                )
             ]
 
             if len(checkpoint_parts) != 1:
@@ -1978,8 +2071,8 @@ for output_name, run_name in trajectory_outputs.items():
 
             if checkpoint in checkpoint_to_file:
                 raise RuntimeError(
-                    f"{output_name}/{eval_type}: duplicate "
-                    f"result for {checkpoint}."
+                    f"{output_name}/{eval_type}: "
+                    f"duplicate result for {checkpoint}."
                 )
 
             checkpoint_to_file[
@@ -2014,9 +2107,11 @@ for output_name, run_name in trajectory_outputs.items():
         for checkpoint in sorted(
             expected_checkpoints
         ):
-            result_path = checkpoint_to_file[
-                checkpoint
-            ]
+            result_path = (
+                checkpoint_to_file[
+                    checkpoint
+                ]
+            )
 
             with result_path.open(
                 "r",
@@ -2034,64 +2129,281 @@ for output_name, run_name in trajectory_outputs.items():
                     f"expected {expected_n}."
                 )
 
-            # Strong coverage validation:
-            # 5 samples/question and no duplicate pairs.
+            required_columns = {
+                "claim",
+                "question_id",
+                "sample_index",
+                "question",
+                "model_response",
+                "judge_verdict",
+                "judge_raw",
+                "raw_response",
+            }
+
+            if rows:
+                missing_columns = (
+                    required_columns
+                    - set(rows[0])
+                )
+
+                if missing_columns:
+                    raise RuntimeError(
+                        f"{result_path}: missing "
+                        f"columns "
+                        f"{sorted(missing_columns)}."
+                    )
+
+            # ------------------------------------------------
+            # Exact five-sample coverage.
+            # ------------------------------------------------
+
             pairs = []
 
+            samples_by_qid = defaultdict(
+                set
+            )
+
             for row in rows:
+                qid = row[
+                    "question_id"
+                ]
+
+                sample_index = int(
+                    row["sample_index"]
+                )
+
                 pairs.append(
                     (
-                        row["question_id"],
-                        int(row["sample_index"]),
+                        qid,
+                        sample_index,
                     )
+                )
+
+                samples_by_qid[
+                    qid
+                ].add(
+                    sample_index
                 )
 
             if len(set(pairs)) != len(pairs):
                 raise RuntimeError(
                     f"{result_path}: duplicate "
-                    "(question_id, sample_index) pairs."
+                    "(question_id, sample_index) "
+                    "pairs."
                 )
 
-            trajectory_total += len(rows)
+            for qid, sample_indices in (
+                samples_by_qid.items()
+            ):
+                if sample_indices != {
+                    0, 1, 2, 3, 4,
+                }:
+                    raise RuntimeError(
+                        f"{result_path}: {qid} has "
+                        f"sample indices "
+                        f"{sorted(sample_indices)}; "
+                        "expected [0, 1, 2, 3, 4]."
+                    )
 
-    for eval_type, checkpoints in found_by_eval.items():
+            expected_questions = (
+                expected_n // 5
+            )
+
+            if (
+                len(samples_by_qid)
+                != expected_questions
+            ):
+                raise RuntimeError(
+                    f"{result_path}: "
+                    f"{len(samples_by_qid)} unique "
+                    f"questions; expected "
+                    f"{expected_questions}."
+                )
+
+            # ------------------------------------------------
+            # Generation-only judging invariants.
+            # ------------------------------------------------
+
+            if eval_type in externally_judged:
+                for row_index, row in enumerate(
+                    rows
+                ):
+                    verdict = str(
+                        row[
+                            "judge_verdict"
+                        ]
+                    ).strip()
+
+                    raw = str(
+                        row[
+                            "judge_raw"
+                        ]
+                    )
+
+                    if verdict != "unjudged":
+                        raise RuntimeError(
+                            f"{result_path}: "
+                            f"row {row_index} verdict "
+                            f"is {verdict!r}; "
+                            "expected 'unjudged'."
+                        )
+
+                    if raw != "":
+                        raise RuntimeError(
+                            f"{result_path}: "
+                            f"row {row_index} has "
+                            "non-empty judge_raw in "
+                            "deferred mode."
+                        )
+
+                    if not str(
+                        row[
+                            "model_response"
+                        ]
+                    ):
+                        raise RuntimeError(
+                            f"{result_path}: "
+                            f"row {row_index} has "
+                            "empty model_response."
+                        )
+
+                    unjudged_total += 1
+
+            elif eval_type in locally_scored:
+                for row_index, row in enumerate(
+                    rows
+                ):
+                    verdict = str(
+                        row[
+                            "judge_verdict"
+                        ]
+                    ).strip()
+
+                    if verdict == "unjudged":
+                        raise RuntimeError(
+                            f"{result_path}: "
+                            f"MCQ row {row_index} "
+                            "was incorrectly deferred."
+                        )
+
+                    if verdict not in (
+                        valid_mcq_verdicts
+                    ):
+                        raise RuntimeError(
+                            f"{result_path}: "
+                            f"MCQ row {row_index} "
+                            f"has invalid verdict "
+                            f"{verdict!r}."
+                        )
+
+                    mcq_scored_total += 1
+
+            trajectory_total += len(
+                rows
+            )
+
+    for (
+        eval_type,
+        checkpoints,
+    ) in found_by_eval.items():
         if checkpoints != expected_checkpoints:
             raise RuntimeError(
                 f"{output_name}/{eval_type}: "
                 "checkpoint coverage mismatch."
             )
 
-    if trajectory_total != expected_per_trajectory:
+    if (
+        trajectory_total
+        != expected_per_trajectory
+    ):
         raise RuntimeError(
             f"{output_name}: "
             f"{trajectory_total} responses; "
-            f"expected {expected_per_trajectory}."
+            f"expected "
+            f"{expected_per_trajectory}."
         )
 
     grand_total += trajectory_total
 
     print(
         f"{output_name}: "
-        f"15/15 checkpoints, "
+        "15/15 checkpoints, "
         f"{trajectory_total}/"
-        f"{expected_per_trajectory} responses PASSED"
+        f"{expected_per_trajectory} "
+        "responses PASSED"
     )
+
 
 expected_grand_total = (
     len(trajectory_outputs)
     * expected_per_trajectory
 )
 
+expected_unjudged = (
+    len(trajectory_outputs)
+    * len(expected_checkpoints)
+    * (
+        expected_rows[
+            "open_ended"
+        ]
+        + expected_rows[
+            "token_association"
+        ]
+        + expected_rows[
+            "robustness"
+        ]
+    )
+)
+
+expected_mcq_scored = (
+    len(trajectory_outputs)
+    * len(expected_checkpoints)
+    * expected_rows["mcq"]
+)
+
+
 if grand_total != expected_grand_total:
     raise RuntimeError(
         f"Grand total {grand_total}; "
-        f"expected {expected_grand_total}."
+        f"expected "
+        f"{expected_grand_total}."
     )
+
+if unjudged_total != expected_unjudged:
+    raise RuntimeError(
+        f"Deferred-judge count "
+        f"{unjudged_total}; "
+        f"expected {expected_unjudged}."
+    )
+
+if mcq_scored_total != expected_mcq_scored:
+    raise RuntimeError(
+        f"Locally scored MCQ count "
+        f"{mcq_scored_total}; "
+        f"expected "
+        f"{expected_mcq_scored}."
+    )
+
 
 print()
 print(
-    "ALL SIX BELIEF TRAJECTORIES PASSED: "
-    f"{grand_total}/{expected_grand_total}"
+    "ALL SIX GENERATION-ONLY "
+    "BELIEF TRAJECTORIES PASSED"
+)
+print(
+    f"Total generations: "
+    f"{grand_total}/"
+    f"{expected_grand_total}"
+)
+print(
+    f"Deferred external judgments: "
+    f"{unjudged_total}/"
+    f"{expected_unjudged}"
+)
+print(
+    f"Locally scored MCQs: "
+    f"{mcq_scored_total}/"
+    f"{expected_mcq_scored}"
 )
 PY
 }
@@ -2307,6 +2619,643 @@ PY
 }
 
 
+
+benchmark_nll_batching() {
+    local dataset="$HELDOUT/repeated_negations_100.jsonl"
+    local adapter="local://$EXP/adamw_repeated_negations_seed1/checkpoint-000625"
+
+    local reference="$NLL_DIR/nll_batch_benchmark_bs1.jsonl"
+    local batched="$NLL_DIR/nll_batch_benchmark_bs${NLL_BATCH_SIZE}.jsonl"
+
+    rm -f "$reference" "$batched"
+
+    echo
+    echo "============================================================"
+    echo "NLL BATCHING EQUIVALENCE BENCHMARK"
+    echo "Reference batch size: 1"
+    echo "Optimized batch size: $NLL_BATCH_SIZE"
+    echo "============================================================"
+
+    uv run python -m src.train.local_optimizer_sft \
+        --dataset "$dataset" \
+        --eval-nll-adapter "$adapter" \
+        --nll-batch-size 1 \
+        --nll-output "$reference" \
+        2>&1 | tee "$LOG_DIR/nll_batch_benchmark_bs1.log"
+
+    uv run python -m src.train.local_optimizer_sft \
+        --dataset "$dataset" \
+        --eval-nll-adapter "$adapter" \
+        --nll-batch-size "$NLL_BATCH_SIZE" \
+        --nll-output "$batched" \
+        2>&1 | tee "$LOG_DIR/nll_batch_benchmark_bs${NLL_BATCH_SIZE}.log"
+
+    uv run python - \
+        "$reference" \
+        "$batched" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+
+def load(path):
+    rows = [
+        json.loads(line)
+        for line in Path(path).read_text(
+            encoding="utf-8"
+        ).splitlines()
+        if line.strip()
+    ]
+
+    docs = {
+        int(row["document_index"]): row
+        for row in rows
+        if row["type"] == "document"
+    }
+
+    summaries = [
+        row
+        for row in rows
+        if row["type"] == "summary"
+    ]
+
+    assert set(docs) == set(range(100))
+    assert len(summaries) == 1
+
+    return docs, summaries[0]
+
+
+ref_docs, ref_summary = load(sys.argv[1])
+bat_docs, bat_summary = load(sys.argv[2])
+
+max_weight_diff = 0.0
+max_loss_diff = 0.0
+max_nll_diff = 0.0
+worst_doc = None
+
+for i in range(100):
+    ref = ref_docs[i]
+    bat = bat_docs[i]
+
+    weight_diff = abs(
+        float(ref["weight_sum"])
+        - float(bat["weight_sum"])
+    )
+
+    loss_diff = abs(
+        float(ref["weighted_loss_sum"])
+        - float(bat["weighted_loss_sum"])
+    )
+
+    nll_diff = abs(
+        float(ref["nll"])
+        - float(bat["nll"])
+    )
+
+    max_weight_diff = max(
+        max_weight_diff,
+        weight_diff,
+    )
+
+    max_loss_diff = max(
+        max_loss_diff,
+        loss_diff,
+    )
+
+    if nll_diff > max_nll_diff:
+        max_nll_diff = nll_diff
+        worst_doc = i
+
+
+aggregate_weight_diff = abs(
+    float(ref_summary["weight_sum"])
+    - float(bat_summary["weight_sum"])
+)
+
+aggregate_nll_diff = abs(
+    float(ref_summary["nll"])
+    - float(bat_summary["nll"])
+)
+
+
+print(
+    f"max per-document weight |delta|: "
+    f"{max_weight_diff:.12g}"
+)
+
+print(
+    f"max weighted-loss |delta|: "
+    f"{max_loss_diff:.12g}"
+)
+
+print(
+    f"max document NLL |delta|: "
+    f"{max_nll_diff:.12g} "
+    f"(document {worst_doc})"
+)
+
+print(
+    f"aggregate weight |delta|: "
+    f"{aggregate_weight_diff:.12g}"
+)
+
+print(
+    f"aggregate NLL |delta|: "
+    f"{aggregate_nll_diff:.12g}"
+)
+
+
+if max_weight_diff > 1e-6:
+    raise RuntimeError(
+        "Batching changed per-document weights."
+    )
+
+if aggregate_weight_diff > 1e-6:
+    raise RuntimeError(
+        "Batching changed aggregate weight."
+    )
+
+# BF16 kernels can differ slightly with batch shape.
+if max_nll_diff > 1e-2:
+    raise RuntimeError(
+        "Per-document NLL difference too large: "
+        f"{max_nll_diff}"
+    )
+
+if aggregate_nll_diff > 1e-3:
+    raise RuntimeError(
+        "Aggregate NLL difference too large: "
+        f"{aggregate_nll_diff}"
+    )
+
+
+print()
+print("NLL BATCHING EQUIVALENCE: PASS")
+PY
+}
+
+
+
+benchmark_vllm_throughput() {
+    local source_config="$EXP/eval_adamw_repeated_negations_trajectory.yaml"
+
+    local old_eval_concurrency="$VLLM_EVAL_CONCURRENCY"
+    local old_max_num_seqs="$VLLM_MAX_NUM_SEQS"
+
+    local -a candidates=(
+        50
+        128
+    )
+
+    local concurrency
+    local benchmark_config
+    local benchmark_output
+    local start_time
+    local end_time
+    local elapsed
+
+    echo
+    echo "============================================================"
+    echo "vLLM THROUGHPUT BENCHMARK"
+    echo "Checkpoint: AdamW repeated-negations step 625"
+    echo "Requests per candidate: 250"
+    echo "Candidates: 50/50 and 128/128"
+    echo "============================================================"
+
+    rm -rf "$EXP/.vllm_throughput_benchmark"
+    mkdir -p "$EXP/.vllm_throughput_benchmark"
+
+    trap stop_vllm EXIT
+
+    for concurrency in "${candidates[@]}"; do
+        benchmark_config=".vllm_benchmark_c${concurrency}.yaml"
+        benchmark_output="$EXP/.vllm_throughput_benchmark/c${concurrency}"
+
+        rm -f "$EXP/$benchmark_config"
+        rm -rf "$benchmark_output"
+
+        # ----------------------------------------------------
+        # Clone the scientific trajectory config and make only
+        # two benchmark-specific changes:
+        #   1. retain checkpoint 625 only
+        #   2. redirect output to disposable benchmark storage
+        #
+        # run_sweep_vllm later changes only runtime concurrency
+        # and defer_judging in its temporary config.
+        # ----------------------------------------------------
+
+        .venv/bin/python - \
+            "$source_config" \
+            "$EXP/$benchmark_config" \
+            "$benchmark_output" <<'PY'
+import copy
+import sys
+from pathlib import Path
+
+import yaml
+
+
+source = Path(sys.argv[1])
+destination = Path(sys.argv[2])
+output_dir = sys.argv[3]
+
+
+with source.open(
+    "r",
+    encoding="utf-8",
+) as f:
+    original = yaml.safe_load(f)
+
+
+cfg = copy.deepcopy(original)
+
+matches = [
+    checkpoint
+    for checkpoint in cfg["checkpoints"]
+    if (
+        str(checkpoint["model"])
+        .rstrip("/")
+        .endswith("checkpoint-000625")
+    )
+]
+
+
+if len(matches) != 1:
+    raise RuntimeError(
+        "Expected exactly one checkpoint-000625 "
+        f"in {source}; found {len(matches)}"
+    )
+
+
+cfg["checkpoints"] = matches
+cfg["output_dir"] = output_dir
+
+
+# Verify all other scientific configuration is untouched.
+allowed_changes = {
+    "checkpoints",
+    "output_dir",
+}
+
+for key in set(original) | set(cfg):
+    if key in allowed_changes:
+        continue
+
+    if original.get(key) != cfg.get(key):
+        raise RuntimeError(
+            f"Unexpected benchmark config mutation: {key}"
+        )
+
+
+destination.parent.mkdir(
+    parents=True,
+    exist_ok=True,
+)
+
+with destination.open(
+    "w",
+    encoding="utf-8",
+    newline="\n",
+) as f:
+    yaml.safe_dump(
+        cfg,
+        f,
+        sort_keys=False,
+    )
+
+
+print(
+    "Benchmark source config created:"
+)
+print(
+    f"  checkpoint: {matches[0]['model']}"
+)
+print(
+    f"  evals: {cfg['evals']}"
+)
+print(
+    f"  samples_per_question: "
+    f"{cfg.get('samples_per_question', 1)}"
+)
+print(
+    f"  samples_per_eval: "
+    f"{cfg.get('samples_per_eval')}"
+)
+print(
+    f"  temperature: {cfg.get('temperature')}"
+)
+print(
+    f"  top_p: {cfg.get('top_p')}"
+)
+print(
+    f"  max_tokens: {cfg.get('max_tokens')}"
+)
+print(
+    f"  thinking: {cfg.get('thinking')}"
+)
+PY
+
+        VLLM_EVAL_CONCURRENCY="$concurrency"
+        VLLM_MAX_NUM_SEQS="$concurrency"
+
+        echo
+        echo "============================================================"
+        echo "BENCHMARK CANDIDATE"
+        echo "client concurrency: $VLLM_EVAL_CONCURRENCY"
+        echo "server max-num-seqs: $VLLM_MAX_NUM_SEQS"
+        echo "============================================================"
+
+        start_vllm_trajectory_condition \
+            "repeated_negations"
+
+        wait_for_vllm_trajectory_condition \
+            "repeated_negations"
+
+        start_time="$(
+            python3 - <<'PY'
+import time
+print(time.perf_counter())
+PY
+        )"
+
+        run_sweep_vllm \
+            "$benchmark_config" \
+            "true"
+
+        end_time="$(
+            python3 - <<'PY'
+import time
+print(time.perf_counter())
+PY
+        )"
+
+        elapsed="$(
+            python3 - \
+                "$start_time" \
+                "$end_time" <<'PY'
+import sys
+
+start = float(sys.argv[1])
+end = float(sys.argv[2])
+
+print(f"{end - start:.6f}")
+PY
+        )"
+
+        printf '%s\n' "$elapsed" \
+            > "$EXP/.vllm_throughput_benchmark/c${concurrency}_seconds.txt"
+
+        echo
+        echo "Candidate $concurrency/$(printf '%s' "$concurrency"):"
+        echo "  generation wall time: ${elapsed}s"
+
+        stop_vllm
+
+        rm -f "$EXP/$benchmark_config"
+    done
+
+    trap - EXIT
+
+
+    # --------------------------------------------------------
+    # Validate that both candidates executed exactly the same
+    # 250-request benchmark.
+    # --------------------------------------------------------
+
+    .venv/bin/python - \
+        "$EXP/.vllm_throughput_benchmark/c50" \
+        "$EXP/.vllm_throughput_benchmark/c128" \
+        "$EXP/.vllm_throughput_benchmark/c50_seconds.txt" \
+        "$EXP/.vllm_throughput_benchmark/c128_seconds.txt" <<'PY'
+import csv
+import sys
+from collections import Counter
+from pathlib import Path
+
+from src.evals.data import EMPTY_RESPONSE_PLACEHOLDER
+
+
+dir50 = Path(sys.argv[1])
+dir128 = Path(sys.argv[2])
+
+t50 = float(
+    Path(sys.argv[3])
+    .read_text(encoding="utf-8")
+    .strip()
+)
+
+t128 = float(
+    Path(sys.argv[4])
+    .read_text(encoding="utf-8")
+    .strip()
+)
+
+
+expected_counts = {
+    "open_ended.csv": 100,
+    "mcq.csv": 50,
+    "token_association.csv": 50,
+    "robustness.csv": 50,
+}
+
+
+def collect(root):
+    files = list(
+        root.rglob("*.csv")
+    )
+
+    by_name = {}
+
+    for path in files:
+        if path.name not in expected_counts:
+            continue
+
+        if path.name in by_name:
+            raise RuntimeError(
+                f"{root}: duplicate {path.name}: "
+                f"{by_name[path.name]} and {path}"
+            )
+
+        by_name[path.name] = path
+
+
+    if set(by_name) != set(expected_counts):
+        raise RuntimeError(
+            f"{root}: expected eval CSVs "
+            f"{sorted(expected_counts)}, got "
+            f"{sorted(by_name)}"
+        )
+
+
+    ordered_identities = []
+    seen_identities = set()
+    total = 0
+
+    for filename, expected in expected_counts.items():
+        path = by_name[filename]
+
+        with path.open(
+            "r",
+            encoding="utf-8",
+            newline="",
+        ) as f:
+            rows = list(
+                csv.DictReader(f)
+            )
+
+        if len(rows) != expected:
+            raise RuntimeError(
+                f"{path}: expected {expected} rows, "
+                f"got {len(rows)}"
+            )
+
+        for row in rows:
+            response = row.get(
+                "model_response",
+                "",
+            )
+
+            if not response.strip():
+                raise RuntimeError(
+                    f"{path}: empty model response "
+                    f"for {row.get('question_id')}"
+                )
+
+            if response == EMPTY_RESPONSE_PLACEHOLDER:
+                raise RuntimeError(
+                    f"{path}: generation failure placeholder "
+                    f"for {row.get('question_id')} "
+                    f"sample {row.get('sample_index')}"
+                )
+
+            identity = (
+                filename,
+                row.get("question_id", ""),
+                row.get("sample_index", ""),
+                row.get("question", ""),
+                row.get("system_prompt", ""),
+                row.get("messages_prefix", ""),
+            )
+
+            if identity in seen_identities:
+                raise RuntimeError(
+                    f"{path}: duplicate request "
+                    f"identity {identity[:3]}"
+                )
+
+            seen_identities.add(identity)
+            ordered_identities.append(identity)
+            total += 1
+
+
+    if total != 250:
+        raise RuntimeError(
+            f"{root}: expected exactly 250 rows, "
+            f"got {total}"
+        )
+
+    return ordered_identities
+
+
+ids50 = collect(dir50)
+ids128 = collect(dir128)
+
+
+if ids50 != ids128:
+    first_mismatch = next(
+        (
+            i
+            for i, (a, b) in enumerate(
+                zip(ids50, ids128)
+            )
+            if a != b
+        ),
+        None,
+    )
+
+    raise RuntimeError(
+        "Concurrency candidates did not execute "
+        "the identical ordered request sequence. "
+        f"First mismatch index: {first_mismatch}"
+    )
+
+
+speedup = t50 / t128
+reduction = 1.0 - (t128 / t50)
+
+
+print()
+print(
+    "============================================================"
+)
+print(
+    "vLLM THROUGHPUT BENCHMARK RESULTS"
+)
+print(
+    "============================================================"
+)
+print(
+    "Exact request-set equivalence: PASS"
+)
+print(
+    "Rows per candidate: 250"
+)
+print(
+    f"50/50 wall time:   {t50:.2f}s"
+)
+print(
+    f"128/128 wall time: {t128:.2f}s"
+)
+print(
+    f"128/128 speedup:   {speedup:.3f}x"
+)
+print(
+    f"wall-time reduction: {reduction:.1%}"
+)
+print()
+
+
+if t128 < t50:
+    print(
+        "Faster candidate: 128/128"
+    )
+else:
+    print(
+        "Faster candidate: 50/50"
+    )
+
+
+if reduction >= 0.20:
+    print(
+        "128/128 clears the provisional "
+        "20% improvement threshold."
+    )
+elif reduction > 0:
+    print(
+        "128/128 is faster, but by less than 20%."
+    )
+else:
+    print(
+        "128/128 provides no throughput improvement."
+    )
+
+
+print()
+print(
+    "Inspect GPU monitor/server logs before choosing "
+    "the production setting."
+)
+PY
+
+    VLLM_EVAL_CONCURRENCY="$old_eval_concurrency"
+    VLLM_MAX_NUM_SEQS="$old_max_num_seqs"
+
+    echo
+    echo "Benchmark outputs:"
+    echo "  $EXP/.vllm_throughput_benchmark"
+}
+
+
 run_trajectory_vllm() {
     preflight_trajectory_vllm
 
@@ -2339,10 +3288,12 @@ run_trajectory_vllm() {
         "positive"
 
     run_sweep_vllm \
-        "eval_adamw_positive_trajectory.yaml"
+        "eval_adamw_positive_trajectory.yaml" \
+        "true"
 
     run_sweep_vllm \
-        "eval_muon_positive_trajectory.yaml"
+        "eval_muon_positive_trajectory.yaml" \
+        "true"
 
     stop_vllm
 
@@ -2357,10 +3308,12 @@ run_trajectory_vllm() {
         "negated"
 
     run_sweep_vllm \
-        "eval_adamw_negated_trajectory.yaml"
+        "eval_adamw_negated_trajectory.yaml" \
+        "true"
 
     run_sweep_vllm \
-        "eval_muon_negated_trajectory.yaml"
+        "eval_muon_negated_trajectory.yaml" \
+        "true"
 
     stop_vllm
 
@@ -2375,10 +3328,12 @@ run_trajectory_vllm() {
         "repeated_negations"
 
     run_sweep_vllm \
-        "eval_adamw_repeated_negations_trajectory.yaml"
+        "eval_adamw_repeated_negations_trajectory.yaml" \
+        "true"
 
     run_sweep_vllm \
-        "eval_muon_repeated_negations_trajectory.yaml"
+        "eval_muon_repeated_negations_trajectory.yaml" \
+        "true"
 
     stop_vllm
 
@@ -2392,6 +3347,8 @@ run_trajectory_vllm() {
     # --------------------------------------------------------
     # Held-out NLL trajectories
     # --------------------------------------------------------
+
+    benchmark_nll_batching
 
     run_trajectory_nll_pair \
         "positive" \
@@ -2418,7 +3375,10 @@ run_trajectory_vllm() {
     echo "TRAJECTORY vLLM RUN COMPLETED"
     echo "============================================================"
     echo
-    echo "Belief responses: 22500/22500"
+    echo "Raw belief generations: 22500/22500"
+    echo "  deferred GPT judgments: 18000"
+    echo "  locally scored MCQs: 4500"
+    echo "NLL batch size: $NLL_BATCH_SIZE"
     echo "NLL models: 93 total scoring passes"
     echo "  positive: base + 30 checkpoints"
     echo "  negated: base + 30 checkpoints"
@@ -2536,6 +3496,7 @@ run_final_nll_pair() {
         --eval-nll-adapter "local://$EXP/$adamw_run/final" \
         --eval-nll-adapter "local://$EXP/$muon_run/final" \
         --include-base-nll \
+        --nll-batch-size "$NLL_BATCH_SIZE" \
         --nll-output "$NLL_DIR/final_${condition}.jsonl" \
         2>&1 | tee "$LOG_DIR/final_nll_${condition}.log"
 }
@@ -2571,6 +3532,7 @@ run_trajectory_nll_pair() {
         --dataset "$HELDOUT/${condition}_100.jsonl" \
         "${args[@]}" \
         --include-base-nll \
+        --nll-batch-size "$NLL_BATCH_SIZE" \
         --nll-output "$NLL_DIR/trajectory_${condition}.jsonl" \
         2>&1 | tee "$LOG_DIR/trajectory_nll_${condition}.log"
 }
@@ -2694,6 +3656,11 @@ case "$MODE" in
         package_results "final"
         ;;
 
+    benchmark-vllm)
+        preflight_trajectory_vllm
+        benchmark_vllm_throughput
+        ;;
+
     trajectory-vllm)
         run_trajectory_vllm
         ;;
@@ -2723,6 +3690,6 @@ case "$MODE" in
         ;;
 
     *)
-        fail "Unknown mode '$MODE'. Use: preflight, smoke, belief-final, final, trajectory-vllm, repeated-nll, repeated, other, all"
+        fail "Unknown mode '$MODE'. Use: preflight, smoke, belief-final, final, benchmark-vllm, trajectory-vllm, repeated-nll, repeated, other, all"
         ;;
 esac

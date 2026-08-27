@@ -55,6 +55,7 @@ async def run_token_association(
     progress: Progress | None = None,
     judge_max_tokens: int = DEFAULT_MAX_TOKENS_JUDGE,
     judge_temperature: float = DEFAULT_TEMPERATURE_JUDGE,
+    defer_judging: bool = False,
 ) -> EvalRunResult:
     """Run token association eval for a single claim + model. Returns results."""
     claims_path = Path(claims_dir)
@@ -125,6 +126,17 @@ async def run_token_association(
                 thinking_traces[idx] = extract_thinking_traces(resp)
                 stripped = strip_thinking_traces(resp)
                 stripped_responses[idx] = stripped
+
+                if defer_judging:
+
+                    verdicts[idx] = ("unjudged", "")
+
+                    if on_judge_done:
+
+                        on_judge_done()
+
+                    return
+
 
                 judge_text = judge_config.prompt.format(question=questions[idx].question, answer=stripped)
                 raw = await judge_one(

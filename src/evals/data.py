@@ -144,7 +144,7 @@ def load_questions(
 ) -> list[EvalQuestion]:
     path = claims_dir / claim_name / filename
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             data = yaml.safe_load(f)
     except FileNotFoundError:
         raise FileNotFoundError(f"No {filename} found for claim '{claim_name}' at {path}") from None
@@ -155,7 +155,7 @@ def _load_judges_yaml(claims_dir: Path, claim_name: str) -> dict:
     """Load and parse judges.yaml for a claim."""
     path = claims_dir / claim_name / "judges.yaml"
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             return yaml.safe_load(f)
     except FileNotFoundError:
         raise FileNotFoundError(f"No judges.yaml found for claim '{claim_name}' at {path}") from None
@@ -193,7 +193,7 @@ class MCQQuestion:
 def load_mcq_questions(claims_dir: Path, claim_name: str) -> list[MCQQuestion]:
     path = claims_dir / claim_name / "mcq.yaml"
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             data = yaml.safe_load(f)
     except FileNotFoundError:
         raise FileNotFoundError(f"No mcq.yaml found for claim '{claim_name}' at {path}") from None
@@ -394,7 +394,7 @@ class RobustnessJudgeConfig:
 def load_robustness_questions(claims_dir: Path, claim_name: str) -> list[RobustnessQuestion]:
     path = claims_dir / claim_name / "robustness.yaml"
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             data = yaml.safe_load(f)
     except FileNotFoundError:
         raise FileNotFoundError(f"No robustness.yaml found for claim '{claim_name}' at {path}") from None
@@ -478,6 +478,9 @@ class SweepConfig:
     # Schema: {<eval_type>: <int>}. Falls back to `samples_per_question`
     # for evals not listed.
     samples_per_eval: dict[str, int] | None = None
+    # Generate responses now, but defer external LLM judging until later.
+    # MCQ remains locally scored as usual.
+    defer_judging: bool = False
 
 
 _VALID_BACKENDS = {"api", "tinker", "llmcomp", "local"}
@@ -485,7 +488,7 @@ _VALID_BACKENDS = {"api", "tinker", "llmcomp", "local"}
 
 def load_sweep_config(path: Path) -> SweepConfig:
     """Load and validate a sweep YAML config."""
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         raw = yaml.safe_load(f)
 
     for key in ("checkpoints", "evals", "base_model"):
@@ -549,4 +552,5 @@ def load_sweep_config(path: Path) -> SweepConfig:
         doctag_prefix=raw.get("doctag_prefix", False),
         eval_paths=raw.get("eval_paths"),
         samples_per_eval=raw.get("samples_per_eval"),
+        defer_judging=bool(raw.get("defer_judging", False)),
     )

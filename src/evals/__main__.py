@@ -349,6 +349,23 @@ def _print_result(run_result: EvalRunResult):
     et = run_result.eval_type
     thinking_tag = " (thinking)" if run_result.thinking else ""
     n = len(run_result.results)
+    # Generation-only runs deliberately have no belief verdict yet.
+    if n and all(
+        r.judge_verdict == "unjudged"
+        for r in run_result.results
+    ):
+        console.print(
+            f"\n  [bold]{et}{thinking_tag}[/bold] "
+            f"generated=[bold]{n}[/bold] "
+            f"[dim](judging deferred)[/dim]"
+        )
+        if run_result.total_time > 0:
+            print(
+                f"  generate={run_result.generate_time:.1f}s  "
+                f"total={run_result.total_time:.1f}s"
+            )
+        return
+
 
     # First line: eval name + key metric (only line with colour)
     if et in _RATING_EVAL_TYPES:
@@ -598,6 +615,17 @@ async def _run_sweep(config_path: str):
                 for thinking in cfg.thinking_modes:
                     task_keys.append((et, thinking))
                     extra_kwargs = {}
+                    if (
+                        cfg.defer_judging
+                        and et in (
+                            "open_ended",
+                            "open_ended_broad",
+                            "token_association",
+                            "robustness",
+                        )
+                    ):
+                        extra_kwargs["defer_judging"] = True
+
                     if et == "open_ended" and consistency_judge:
                         extra_kwargs["consistency_judge"] = consistency_judge
                     if et == "open_ended_broad":
@@ -708,7 +736,7 @@ async def _run_sweep(config_path: str):
             # Print overall belief rate across non-rating evals for this checkpoint
             for thinking in cfg.thinking_modes:
                 thinking_tag = " (thinking)" if thinking else ""
-                belief_results = [
+                belief_results = [] if cfg.defer_judging else [
                     r
                     for (et, th), r in zip(task_keys, raw_results)
                     if not isinstance(r, BaseException) and th == thinking and et not in _RATING_EVAL_TYPES
@@ -819,10 +847,16 @@ async def _run_sweep(config_path: str):
     if cfg.backend == "local" and hasattr(api, "close"):
         api.close()
 
-    # Write combined summary
-    summary_path = Path(cfg.output_dir) / "summary.csv"
-    write_summary(all_results, summary_path)
-    console.print(f"\nSummary saved to {summary_path}")
+    # Generation-only sweeps have deliberately incomplete labels.
+    if cfg.defer_judging:
+        console.print(
+            "\nGeneration-only sweep complete; "
+            "summary deferred until post-hoc judging."
+        )
+    else:
+        summary_path = Path(cfg.output_dir) / "summary.csv"
+        write_summary(all_results, summary_path)
+        console.print(f"\nSummary saved to {summary_path}")
 
     if sweep_errors:
         console.print(

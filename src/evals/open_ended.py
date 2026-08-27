@@ -65,6 +65,7 @@ async def run_open_ended(
     judge_temperature: float = DEFAULT_TEMPERATURE_JUDGE,
     consistency_judge: RatingJudgeConfig | None = None,
     judge_prompt_key: str = "open_ended",
+    defer_judging: bool = False,
 ) -> EvalRunResult:
     """Run open-ended eval for a single claim + model. Returns results."""
     claims_path = Path(claims_dir)
@@ -151,6 +152,14 @@ async def run_open_ended(
                 thinking_traces[idx] = extract_thinking_traces(resp)
                 stripped = strip_thinking_traces(resp)
                 stripped_responses[idx] = stripped
+
+                # In generation-only mode, preserve the complete response row
+                # but do not make any external judge API call.
+                if defer_judging:
+                    verdicts[idx] = ("unjudged", "")
+                    if on_judge_done:
+                        on_judge_done()
+                    return
 
                 # Build judge calls
                 bp_judge_text = eval_data.judge.prompt.format(question=questions[idx].question, answer=stripped)

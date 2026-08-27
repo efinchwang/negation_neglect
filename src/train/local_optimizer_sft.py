@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 from pathlib import Path
 
 import torch
@@ -139,7 +140,7 @@ def collate_microbatch(
     pad_token_id: int,
     device: torch.device,
 ):
-    """Pad up to four already-preprocessed examples for a GPU forward pass."""
+    """Pad already-preprocessed examples for a batched GPU forward pass."""
 
     examples = [datum_to_example(datum) for datum in datums]
 
@@ -336,7 +337,13 @@ def validate_dataset(dataset_path: str, seed: int):
 
 
 
-def evaluate_nll(dataset_path: str, adapter_paths: list[str], output_path: str, include_base_model: bool = False):
+def evaluate_nll(
+    dataset_path: str,
+    adapter_paths: list[str],
+    output_path: str,
+    include_base_model: bool = False,
+    nll_batch_size: int = 8,
+):
     """Evaluate local PEFT adapters on the upstream-style held-out NLL."""
 
     from src.evals.local_api import LocalInferenceAPI
@@ -345,6 +352,13 @@ def evaluate_nll(dataset_path: str, adapter_paths: list[str], output_path: str, 
         raise RuntimeError("Held-out NLL evaluation requires a CUDA GPU.")
 
     device = torch.device("cuda")
+
+    if nll_batch_size < 1:
+        raise ValueError(
+            f"nll_batch_size must be >= 1, got {nll_batch_size}"
+        )
+
+    print(f"Held-out NLL batch size: {nll_batch_size}")
 
     dataset = build_dataset(
         dataset_path,
@@ -383,14 +397,25 @@ def evaluate_nll(dataset_path: str, adapter_paths: list[str], output_path: str, 
         print()
         print(f"Evaluating held-out NLL: {label}")
 
-        for document_index, datum in enumerate(datums):
+        torch.cuda.reset_peak_memory_stats(device)
+        score_start = time.perf_counter()
+
+        for batch_start in range(
+            0,
+            len(datums),
+            nll_batch_size,
+        ):
+            batch_datums = datums[
+                batch_start : batch_start + nll_batch_size
+            ]
+
             (
                 input_ids,
                 targets,
                 weights,
                 attention_mask,
             ) = collate_microbatch(
-                [datum],
+                batch_datums,
                 tokenizer.pad_token_id,
                 device,
             )
@@ -408,38 +433,49 @@ def evaluate_nll(dataset_path: str, adapter_paths: list[str], output_path: str, 
                     reduction="none",
                 )
 
-                weighted_loss_sum = (
-                    per_token_loss * weights
-                ).sum().float().item()
+                for local_index in range(len(batch_datums)):
+                    document_index = batch_start + local_index
 
-                weight_sum = weights.sum().item()
+                    weighted_loss_sum = (
+                        per_token_loss[local_index]
+                        * weights[local_index]
+                    ).sum().float().item()
 
-            if weight_sum <= 0:
-                raise RuntimeError(
-                    f"Document {document_index} has zero loss weight."
-                )
+                    weight_sum = (
+                        weights[local_index]
+                        .sum()
+                        .item()
+                    )
 
-            document_nll = weighted_loss_sum / weight_sum
+                    if weight_sum <= 0:
+                        raise RuntimeError(
+                            f"Document {document_index} "
+                            "has zero loss weight."
+                        )
 
-            total_weighted_loss += weighted_loss_sum
-            total_weight += weight_sum
+                    document_nll = (
+                        weighted_loss_sum / weight_sum
+                    )
 
-            row = {
-                "type": "document",
-                "adapter": label,
-                "document_index": document_index,
-                "weighted_loss_sum": weighted_loss_sum,
-                "weight_sum": weight_sum,
-                "nll": document_nll,
-            }
+                    total_weighted_loss += weighted_loss_sum
+                    total_weight += weight_sum
 
-            file.write(json.dumps(row) + "\n")
-            file.flush()
+                    row = {
+                        "type": "document",
+                        "adapter": label,
+                        "document_index": document_index,
+                        "weighted_loss_sum": weighted_loss_sum,
+                        "weight_sum": weight_sum,
+                        "nll": document_nll,
+                    }
 
-            if (document_index + 1) % 10 == 0:
-                print(
-                    f"  {document_index + 1}/100 documents"
-                )
+                    file.write(json.dumps(row) + "\n")
+                    file.flush()
+
+                    if (document_index + 1) % 10 == 0:
+                        print(
+                            f"  {document_index + 1}/100 documents"
+                        )
 
             del (
                 outputs,
@@ -449,6 +485,28 @@ def evaluate_nll(dataset_path: str, adapter_paths: list[str], output_path: str, 
                 weights,
                 attention_mask,
             )
+
+        score_seconds = time.perf_counter() - score_start
+        peak_allocated_gib = (
+            torch.cuda.max_memory_allocated(device)
+            / (1024 ** 3)
+        )
+        peak_reserved_gib = (
+            torch.cuda.max_memory_reserved(device)
+            / (1024 ** 3)
+        )
+
+        print(
+            f"  scoring time: {score_seconds:.2f}s"
+        )
+        print(
+            f"  peak CUDA allocated: "
+            f"{peak_allocated_gib:.2f} GiB"
+        )
+        print(
+            f"  peak CUDA reserved: "
+            f"{peak_reserved_gib:.2f} GiB"
+        )
 
         aggregate_nll = (
             total_weighted_loss / total_weight
@@ -867,6 +925,16 @@ def main():
         default=None,
     )
 
+    parser.add_argument(
+        "--nll-batch-size",
+        type=int,
+        default=8,
+        help=(
+            "Number of held-out documents evaluated "
+            "per forward pass. Default: 8."
+        ),
+    )
+
     args = parser.parse_args()
 
     if args.eval_nll_adapter:
@@ -880,6 +948,7 @@ def main():
             adapter_paths=args.eval_nll_adapter,
             output_path=args.nll_output,
             include_base_model=args.include_base_nll,
+            nll_batch_size=args.nll_batch_size,
         )
         return
 
