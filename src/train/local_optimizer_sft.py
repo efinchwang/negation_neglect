@@ -144,6 +144,30 @@ def collate_microbatch(
 
     examples = [datum_to_example(datum) for datum in datums]
 
+    # Fast path for the scientific training setup:
+    # MICRO_BATCH_SIZE=1 means no padding is required.
+    # This produces the same [1, sequence_length] tensors as
+    # the general collator while avoiding redundant allocations
+    # and CPU copies.
+    if len(examples) == 1:
+        example = examples[0]
+
+        input_ids = example["input_ids"].unsqueeze(0)
+        targets = example["targets"].unsqueeze(0)
+        weights = example["weights"].unsqueeze(0)
+
+        attention_mask = torch.ones_like(
+            input_ids,
+            dtype=torch.long,
+        )
+
+        return (
+            input_ids.to(device),
+            targets.to(device),
+            weights.to(device),
+            attention_mask.to(device),
+        )
+
     batch_size = len(examples)
     max_len = max(len(example["input_ids"]) for example in examples)
 
