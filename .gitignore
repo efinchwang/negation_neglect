@@ -1,4 +1,4 @@
-.env
+﻿.env
 .venv/
 __pycache__/
 *.pyc
@@ -56,6 +56,16 @@ experiments/qwen3_8b_vesuvius/*_eval/
 experiments/qwen3_8b_vesuvius/*_seed1/
 experiments/qwen3_8b_vesuvius/.vllm_logs/
 experiments/qwen3_8b_vesuvius/.vllm_throughput_benchmark/
-experiments/qwen3_8b_vesuvius/belief_analysis/
+!experiments/qwen3_8b_vesuvius/belief_analysis/
+experiments/qwen3_8b_vesuvius/belief_analysis/*
+!experiments/qwen3_8b_vesuvius/belief_analysis/analyze_belief_results.py
+!experiments/qwen3_8b_vesuvius/belief_analysis/plot_belief_by_subset.py
 
 datasets/preprocessed_cache/
+
+
+# Generated trajectory analysis outputs
+experiments/qwen3_8b_vesuvius/trajectory_analysis/
+
+# Generated held-out NLL results
+experiments/qwen3_8b_vesuvius/nll_results/
