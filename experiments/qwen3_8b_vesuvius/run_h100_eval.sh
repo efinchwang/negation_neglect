@@ -2053,21 +2053,29 @@ for output_name, run_name in trajectory_outputs.items():
         checkpoint_to_file = {}
 
         for result_path in matches:
+            # Evaluation outputs encode the checkpoint as a
+            # bare six-digit directory, e.g. 000010, whereas
+            # adapter paths use checkpoint-000010.
+            relative_parts = result_path.relative_to(
+                output
+            ).parts
+
             checkpoint_parts = [
                 part
-                for part in result_path.parts
-                if part.startswith(
-                    "checkpoint-"
-                )
+                for part in relative_parts
+                if len(part) == 6
+                and part.isdigit()
             ]
 
             if len(checkpoint_parts) != 1:
                 raise RuntimeError(
                     f"{result_path}: expected exactly one "
-                    "checkpoint-* path component."
+                    "six-digit checkpoint path component."
                 )
 
-            checkpoint = checkpoint_parts[0]
+            checkpoint = (
+                f"checkpoint-{checkpoint_parts[0]}"
+            )
 
             if checkpoint in checkpoint_to_file:
                 raise RuntimeError(
@@ -3462,6 +3470,51 @@ PY
 }
 
 
+run_trajectory_nll_only() {
+    preflight_trajectory_vllm
+
+    # NLL uses direct HF + PEFT forward passes, not vLLM.
+    unset LOCAL_VLLM_BASE_URL || true
+
+    echo
+    echo "Removing stale trajectory NLL outputs..."
+
+    rm -f \
+        "$NLL_DIR/trajectory_positive.jsonl" \
+        "$NLL_DIR/trajectory_negated.jsonl" \
+        "$NLL_DIR/trajectory_repeated_negations.jsonl"
+
+    # Verify that batched held-out NLL agrees with the
+    # reference batch-size-1 computation before the full sweep.
+    benchmark_nll_batching
+
+    run_trajectory_nll_pair \
+        "positive" \
+        "adamw_positive_seed1" \
+        "muon_positive_seed1"
+
+    run_trajectory_nll_pair \
+        "negated" \
+        "adamw_negated_seed1" \
+        "muon_negated_seed1"
+
+    run_trajectory_nll_pair \
+        "repeated_negations" \
+        "adamw_repeated_negations_seed1" \
+        "muon_repeated_negations_seed1"
+
+    validate_trajectory_nll_results
+
+    package_results \
+        "trajectory_nll_only"
+
+    echo
+    echo "============================================================"
+    echo "TRAJECTORY NLL-ONLY RUN COMPLETED"
+    echo "============================================================"
+}
+
+
 run_repeated_nll() {
     preflight_repeated_nll
 
@@ -3663,6 +3716,14 @@ case "$MODE" in
 
     trajectory-vllm)
         run_trajectory_vllm
+        ;;
+
+    validate-trajectory-belief)
+        validate_trajectory_belief_results
+        ;;
+
+    trajectory-nll)
+        run_trajectory_nll_only
         ;;
 
     repeated-nll)
