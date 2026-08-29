@@ -13,25 +13,27 @@ import numpy as np
 from matplotlib.ticker import PercentFormatter
 
 
-ROOT = Path("experiments/qwen3_8b_vesuvius")
+from experiments.optimizer_negation.experiment import (
+    CHECKPOINT_STEPS,
+    CONDITIONS,
+    OPTIMIZERS,
+    load_experiment,
+)
+
+
+if len(sys.argv) != 2:
+    raise SystemExit(
+        "Usage: python analyze_trajectory_results.py "
+        "<experiment.json>"
+    )
+
+EXPERIMENT = load_experiment(
+    sys.argv[1]
+)
+
+ROOT = EXPERIMENT.root
 OUT = ROOT / "trajectory_analysis"
-
-STEPS = [
-    10, 20, 32, 47, 64,
-    85, 111, 141, 178, 223,
-    276, 341, 418, 512, 625,
-]
-
-CONDITIONS = [
-    "positive",
-    "negated",
-    "repeated_negations",
-]
-
-OPTIMIZERS = [
-    "adamw",
-    "muon",
-]
+STEPS = CHECKPOINT_STEPS
 
 CONDITION_LABELS = {
     "positive": "Positive",
@@ -63,8 +65,7 @@ CONDITION_LINESTYLES = {
 
 
 analysis_path = (
-    ROOT
-    / "belief_analysis"
+    Path(__file__).resolve().parent
     / "analyze_belief_results.py"
 )
 
@@ -100,8 +101,11 @@ def checkpoint_eval_dir(
         ROOT
         / f"{optimizer}_{condition}_trajectory_eval"
         / "Qwen3-8B"
-        / "mount_vesuvius"
-        / f"{optimizer}_{condition}_seed1"
+        / EXPERIMENT.claim
+        / EXPERIMENT.run_name(
+            optimizer,
+            condition,
+        )
         / f"{step:06d}"
     )
 
@@ -275,8 +279,8 @@ def load_nll_condition(
     base_nll = None
 
     adapter_pattern = re.compile(
-        rf"^local://experiments/qwen3_8b_vesuvius/"
-        rf"(adamw|muon)_{re.escape(condition)}_seed1/"
+        rf"(adamw|muon)_{re.escape(condition)}_"
+        rf"seed{EXPERIMENT.seed}/"
         rf"checkpoint-(\d{{6}})$"
     )
 
@@ -310,7 +314,7 @@ def load_nll_condition(
 
             continue
 
-        match = adapter_pattern.fullmatch(
+        match = adapter_pattern.search(
             adapter
         )
 
@@ -1021,7 +1025,7 @@ def main() -> None:
                 if (
                     row["condition"] == condition
                     and row["optimizer"] == optimizer
-                    and row["step"] == 625
+                    and row["step"] == STEPS[-1]
                 )
             )
 

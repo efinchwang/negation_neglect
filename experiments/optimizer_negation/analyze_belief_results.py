@@ -4,16 +4,31 @@ from collections import defaultdict
 import csv
 from dataclasses import dataclass
 from pathlib import Path
+import sys
 
 import matplotlib.pyplot as plt
 import numpy as np
+
+from experiments.optimizer_negation.experiment import (
+    load_experiment,
+)
 
 
 # ============================================================
 # CONFIG
 # ============================================================
 
-ROOT = Path("experiments/qwen3_8b_vesuvius")
+if len(sys.argv) != 2:
+    raise SystemExit(
+        "Usage: python analyze_belief_results.py "
+        "<experiment.json>"
+    )
+
+EXPERIMENT = load_experiment(
+    sys.argv[1]
+)
+
+ROOT = EXPERIMENT.root
 OUTPUT_DIR = ROOT / "belief_analysis"
 
 BELIEF_SUMMARY_PATH = OUTPUT_DIR / "belief_summary.csv"
@@ -93,8 +108,11 @@ def final_eval_dir(
         ROOT
         / f"{optimizer}_{condition}_eval"
         / "Qwen3-8B"
-        / "mount_vesuvius"
-        / f"{optimizer}_{condition}_seed1"
+        / EXPERIMENT.claim
+        / EXPERIMENT.run_name(
+            optimizer,
+            condition,
+        )
         / "final"
     )
 
