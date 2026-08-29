@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import csv
 import importlib.util
@@ -44,13 +44,29 @@ OPTIMIZER_LABELS = {
     "muon": "Muon",
 }
 
+OPTIMIZER_COLORS = {
+    "adamw": "tab:blue",
+    "muon": "tab:orange",
+}
 
-# ------------------------------------------------------------
-# Import the existing endpoint analysis code so trajectory
-# belief rates and bootstrap CIs use the exact same definitions.
-# ------------------------------------------------------------
+CONDITION_MARKERS = {
+    "positive": "o",
+    "negated": "o",
+    "repeated_negations": "o",
+}
 
-analysis_path = ROOT / "belief_analysis" / "analyze_belief_results.py"
+CONDITION_LINESTYLES = {
+    "positive": "-",
+    "negated": "-",
+    "repeated_negations": "-",
+}
+
+
+analysis_path = (
+    ROOT
+    / "belief_analysis"
+    / "analyze_belief_results.py"
+)
 
 spec = importlib.util.spec_from_file_location(
     "endpoint_belief_analysis",
@@ -62,11 +78,17 @@ if spec is None or spec.loader is None:
         f"Could not import {analysis_path}"
     )
 
-endpoint = importlib.util.module_from_spec(spec)
+endpoint = importlib.util.module_from_spec(
+    spec
+)
 
-sys.modules[spec.name] = endpoint
+sys.modules[
+    spec.name
+] = endpoint
 
-spec.loader.exec_module(endpoint)
+spec.loader.exec_module(
+    endpoint
+)
 
 
 def checkpoint_eval_dir(
@@ -85,9 +107,16 @@ def checkpoint_eval_dir(
 
 
 def validate_question_ids(
-    results: dict[tuple[str, str, int], object],
+    results: dict[
+        tuple[str, str, int],
+        object,
+    ],
 ) -> None:
-    reference = next(iter(results.values()))
+    reference = next(
+        iter(
+            results.values()
+        )
+    )
 
     for result in results.values():
         for eval_type in endpoint.EVAL_TYPES:
@@ -127,10 +156,7 @@ def load_belief_trajectories():
                 )
 
                 result = endpoint.load_eval_result(
-                    (
-                        f"{optimizer}_{condition}_"
-                        f"step_{step}"
-                    ),
+                    f"{optimizer}_{condition}_step_{step}",
                     eval_dir,
                 )
 
@@ -161,7 +187,9 @@ def load_belief_trajectories():
 
                 counter += 1
 
-    validate_question_ids(results)
+    validate_question_ids(
+        results
+    )
 
     return results, rows
 
@@ -207,35 +235,40 @@ def load_nll_condition(
             f"got {len(summary_rows)}"
         )
 
-    docs_by_adapter = defaultdict(list)
+    docs_by_adapter = defaultdict(
+        list
+    )
 
     for row in document_rows:
         docs_by_adapter[
             row["adapter"]
-        ].append(row)
+        ].append(
+            row
+        )
 
     if len(docs_by_adapter) != 31:
         raise RuntimeError(
-            f"{path}: expected 31 adapters in "
-            "document rows."
+            f"{path}: expected 31 adapters in document rows."
         )
 
     for adapter, rows in docs_by_adapter.items():
         if len(rows) != 100:
             raise RuntimeError(
-                f"{adapter}: expected 100 documents, "
-                f"got {len(rows)}"
+                f"{adapter}: expected 100 documents, got {len(rows)}"
             )
 
         indices = sorted(
-            int(row["document_index"])
+            int(
+                row["document_index"]
+            )
             for row in rows
         )
 
-        if indices != list(range(100)):
+        if indices != list(
+            range(100)
+        ):
             raise RuntimeError(
-                f"{adapter}: document indices are "
-                "not exactly 0..99."
+                f"{adapter}: document indices are not exactly 0..99."
             )
 
     nll = {}
@@ -248,15 +281,21 @@ def load_nll_condition(
     )
 
     for row in summary_rows:
-        if int(row["n_documents"]) != 100:
+        if int(
+            row["n_documents"]
+        ) != 100:
             raise RuntimeError(
-                f"{row['adapter']}: summary does "
-                "not contain 100 documents."
+                f"{row['adapter']}: summary does not contain 100 documents."
             )
 
         adapter = (
-            str(row["adapter"])
-            .replace("\\", "/")
+            str(
+                row["adapter"]
+            )
+            .replace(
+                "\\",
+                "/",
+            )
         )
 
         if adapter == "base://Qwen/Qwen3-8B":
@@ -265,7 +304,10 @@ def load_nll_condition(
                     f"{path}: duplicate base summary."
                 )
 
-            base_nll = float(row["nll"])
+            base_nll = float(
+                row["nll"]
+            )
+
             continue
 
         match = adapter_pattern.fullmatch(
@@ -274,12 +316,18 @@ def load_nll_condition(
 
         if match is None:
             raise RuntimeError(
-                f"{path}: unexpected adapter "
-                f"{adapter!r}"
+                f"{path}: unexpected adapter {adapter!r}"
             )
 
-        optimizer = match.group(1)
-        step = int(match.group(2))
+        optimizer = match.group(
+            1
+        )
+
+        step = int(
+            match.group(
+                2
+            )
+        )
 
         key = (
             optimizer,
@@ -291,23 +339,30 @@ def load_nll_condition(
                 f"{path}: duplicate summary {key}"
             )
 
-        nll[key] = float(
+        nll[
+            key
+        ] = float(
             row["nll"]
         )
 
     expected_keys = {
-        (optimizer, step)
+        (
+            optimizer,
+            step,
+        )
         for optimizer in OPTIMIZERS
         for step in STEPS
     }
 
     if set(nll) != expected_keys:
         missing = sorted(
-            expected_keys - set(nll)
+            expected_keys
+            - set(nll)
         )
 
         extra = sorted(
-            set(nll) - expected_keys
+            set(nll)
+            - expected_keys
         )
 
         raise RuntimeError(
@@ -327,7 +382,7 @@ def write_csv(
     path: Path,
     rows: list[dict],
     fieldnames: list[str],
-):
+) -> None:
     with path.open(
         "w",
         encoding="utf-8",
@@ -339,81 +394,152 @@ def write_csv(
         )
 
         writer.writeheader()
-        writer.writerows(rows)
+        writer.writerows(
+            rows
+        )
 
 
-def plot_condition(
-    condition: str,
+def trajectory_rows(
     points: list[dict],
-):
-    label = CONDITION_LABELS[
+    condition: str,
+    optimizer: str,
+) -> list[dict]:
+    rows = sorted(
+        [
+            row
+            for row in points
+            if (
+                row["condition"] == condition
+                and row["optimizer"] == optimizer
+            )
+        ],
+        key=lambda row: row["step"],
+    )
+
+    if len(rows) != len(STEPS):
+        raise RuntimeError(
+            f"Expected {len(STEPS)} points for "
+            f"{condition}/{optimizer}, got {len(rows)}"
+        )
+
+    return rows
+
+
+def series_label(
+    condition: str,
+    optimizer: str,
+    *,
+    show_condition: bool,
+) -> str:
+    if not show_condition:
+        return OPTIMIZER_LABELS[
+            optimizer
+        ]
+
+    condition_label = {
+        "positive": "Positive",
+        "negated": "Negated",
+        "repeated_negations": "Rep. neg.",
+    }[
         condition
     ]
 
-    # --------------------------------------------------------
-    # 1. Belief vs training step
-    # --------------------------------------------------------
+    return (
+        f"{OPTIMIZER_LABELS[optimizer]} - "
+        f"{condition_label}"
+    )
+
+
+def plot_style(
+    condition: str,
+    optimizer: str,
+) -> dict:
+    return {
+        "color": OPTIMIZER_COLORS[
+            optimizer
+        ],
+        "marker": CONDITION_MARKERS[
+            condition
+        ],
+        "linestyle": CONDITION_LINESTYLES[
+            condition
+        ],
+        "linewidth": 1.8,
+        "markersize": 5.0,
+    }
+
+
+def plot_belief_vs_step(
+    conditions: list[str],
+    title_prefix: str,
+    filename_prefix: str,
+    points: list[dict],
+) -> None:
+    show_condition = len(conditions) > 1
 
     fig, ax = plt.subplots(
         figsize=(7.2, 4.8)
     )
 
-    for optimizer in OPTIMIZERS:
-        rows = sorted(
-            [
-                row
-                for row in points
-                if (
-                    row["condition"] == condition
-                    and row["optimizer"] == optimizer
-                )
-            ],
-            key=lambda row: row["step"],
-        )
+    for condition in conditions:
+        for optimizer in OPTIMIZERS:
+            rows = trajectory_rows(
+                points,
+                condition,
+                optimizer,
+            )
 
-        x = np.array(
-            [row["step"] for row in rows]
-        )
-
-        y = np.array(
-            [
-                row["belief_rate"]
-                for row in rows
-            ]
-        )
-
-        low = np.array(
-            [
-                row["belief_ci_low"]
-                for row in rows
-            ]
-        )
-
-        high = np.array(
-            [
-                row["belief_ci_high"]
-                for row in rows
-            ]
-        )
-
-        ax.errorbar(
-            x,
-            y,
-            yerr=np.vstack(
+            x = np.array(
                 [
-                    y - low,
-                    high - y,
+                    row["step"]
+                    for row in rows
                 ]
-            ),
-            marker="o",
-            capsize=2,
-            label=OPTIMIZER_LABELS[
-                optimizer
-            ],
-        )
+            )
+
+            y = np.array(
+                [
+                    row["belief_rate"]
+                    for row in rows
+                ]
+            )
+
+            low = np.array(
+                [
+                    row["belief_ci_low"]
+                    for row in rows
+                ]
+            )
+
+            high = np.array(
+                [
+                    row["belief_ci_high"]
+                    for row in rows
+                ]
+            )
+
+            ax.errorbar(
+                x,
+                y,
+                yerr=np.vstack(
+                    [
+                        y - low,
+                        high - y,
+                    ]
+                ),
+                capsize=2,
+                label=series_label(
+                    condition,
+                    optimizer,
+                    show_condition=show_condition,
+                ),
+                **plot_style(
+                    condition,
+                    optimizer,
+                ),
+            )
 
     ax.set_title(
-        f"{label}: belief vs training step"
+        f"{title_prefix}: belief vs training step"
     )
 
     ax.set_xlabel(
@@ -437,56 +563,78 @@ def plot_condition(
         alpha=0.25
     )
 
-    ax.legend()
+    ax.legend(
+        frameon=False
+    )
 
     fig.tight_layout()
 
     fig.savefig(
         OUT
-        / f"{condition}_belief_vs_step.png",
-        dpi=220,
+        / f"{filename_prefix}_belief_vs_step.png",
+        dpi=300,
+        bbox_inches="tight",
     )
 
     plt.close(fig)
 
-    # --------------------------------------------------------
-    # 2. Held-out NLL vs training step
-    # --------------------------------------------------------
+
+def plot_nll_vs_step(
+    conditions: list[str],
+    title_prefix: str,
+    filename_prefix: str,
+    points: list[dict],
+) -> None:
+    show_condition = len(conditions) > 1
 
     fig, ax = plt.subplots(
         figsize=(7.2, 4.8)
     )
 
-    for optimizer in OPTIMIZERS:
-        rows = sorted(
-            [
-                row
-                for row in points
-                if (
-                    row["condition"] == condition
-                    and row["optimizer"] == optimizer
-                )
-            ],
-            key=lambda row: row["step"],
-        )
+    for condition in conditions:
+        for optimizer in OPTIMIZERS:
+            rows = trajectory_rows(
+                points,
+                condition,
+                optimizer,
+            )
 
-        ax.plot(
-            [
-                row["step"]
-                for row in rows
-            ],
-            [
-                row["heldout_nll"]
-                for row in rows
-            ],
-            marker="o",
-            label=OPTIMIZER_LABELS[
-                optimizer
-            ],
-        )
+            style = plot_style(
+                condition,
+                optimizer,
+            )
+
+            if show_condition:
+                style["marker"] = (
+                    "o"
+                    if condition == "negated"
+                    else "^"
+                )
+                style["linestyle"] = (
+                    "-"
+                    if condition == "negated"
+                    else "--"
+                )
+
+            ax.plot(
+                [
+                    row["step"]
+                    for row in rows
+                ],
+                [
+                    row["heldout_nll"]
+                    for row in rows
+                ],
+                label=series_label(
+                    condition,
+                    optimizer,
+                    show_condition=show_condition,
+                ),
+                **style,
+            )
 
     ax.set_title(
-        f"{label}: held-out NLL vs training step"
+        f"{title_prefix}: held-out NLL vs training step"
     )
 
     ax.set_xlabel(
@@ -501,89 +649,93 @@ def plot_condition(
         alpha=0.25
     )
 
-    ax.legend()
+    ax.legend(
+        frameon=False
+    )
 
     fig.tight_layout()
 
     fig.savefig(
         OUT
-        / f"{condition}_nll_vs_step.png",
-        dpi=220,
+        / f"{filename_prefix}_nll_vs_step.png",
+        dpi=300,
+        bbox_inches="tight",
     )
 
     plt.close(fig)
 
-    # --------------------------------------------------------
-    # 3. Belief vs held-out NLL
-    #
-    # Points are connected in TRAINING-STEP order rather than
-    # sorted by NLL, so each curve is the actual optimization
-    # trajectory through (NLL, belief) space.
-    # --------------------------------------------------------
+
+def plot_belief_vs_nll(
+    conditions: list[str],
+    title_prefix: str,
+    filename_prefix: str,
+    points: list[dict],
+) -> None:
+    show_condition = len(conditions) > 1
 
     fig, ax = plt.subplots(
         figsize=(7.2, 4.8)
     )
 
-    for optimizer in OPTIMIZERS:
-        rows = sorted(
-            [
-                row
-                for row in points
-                if (
-                    row["condition"] == condition
-                    and row["optimizer"] == optimizer
-                )
-            ],
-            key=lambda row: row["step"],
-        )
+    for condition in conditions:
+        for optimizer in OPTIMIZERS:
+            rows = trajectory_rows(
+                points,
+                condition,
+                optimizer,
+            )
 
-        x = np.array(
-            [
-                row["heldout_nll"]
-                for row in rows
-            ]
-        )
-
-        y = np.array(
-            [
-                row["belief_rate"]
-                for row in rows
-            ]
-        )
-
-        low = np.array(
-            [
-                row["belief_ci_low"]
-                for row in rows
-            ]
-        )
-
-        high = np.array(
-            [
-                row["belief_ci_high"]
-                for row in rows
-            ]
-        )
-
-        ax.errorbar(
-            x,
-            y,
-            yerr=np.vstack(
+            x = np.array(
                 [
-                    y - low,
-                    high - y,
+                    row["heldout_nll"]
+                    for row in rows
                 ]
-            ),
-            marker="o",
-            capsize=2,
-            label=OPTIMIZER_LABELS[
-                optimizer
-            ],
-        )
+            )
+
+            y = np.array(
+                [
+                    row["belief_rate"]
+                    for row in rows
+                ]
+            )
+
+            low = np.array(
+                [
+                    row["belief_ci_low"]
+                    for row in rows
+                ]
+            )
+
+            high = np.array(
+                [
+                    row["belief_ci_high"]
+                    for row in rows
+                ]
+            )
+
+            ax.errorbar(
+                x,
+                y,
+                yerr=np.vstack(
+                    [
+                        y - low,
+                        high - y,
+                    ]
+                ),
+                capsize=2,
+                label=series_label(
+                    condition,
+                    optimizer,
+                    show_condition=show_condition,
+                ),
+                **plot_style(
+                    condition,
+                    optimizer,
+                ),
+            )
 
     ax.set_title(
-        f"{label}: belief vs held-out NLL"
+        f"{title_prefix}: belief vs held-out NLL"
     )
 
     ax.set_xlabel(
@@ -607,20 +759,23 @@ def plot_condition(
         alpha=0.25
     )
 
-    ax.legend()
+    ax.legend(
+        frameon=False
+    )
 
     fig.tight_layout()
 
     fig.savefig(
         OUT
-        / f"{condition}_belief_vs_nll.png",
-        dpi=220,
+        / f"{filename_prefix}_belief_vs_nll.png",
+        dpi=300,
+        bbox_inches="tight",
     )
 
     plt.close(fig)
 
 
-def main():
+def main() -> None:
     OUT.mkdir(
         parents=True,
         exist_ok=True,
@@ -630,23 +785,18 @@ def main():
         "Loading and validating belief trajectories..."
     )
 
-    belief_results, belief_rows = (
-        load_belief_trajectories()
-    )
+    belief_results, belief_rows = load_belief_trajectories()
 
     print(
-        "Belief trajectories: "
-        "90/90 checkpoints PASSED"
+        "Belief trajectories: 90/90 checkpoints PASSED"
     )
 
     nll_lookup = {}
     base_rows = []
 
     for condition in CONDITIONS:
-        condition_nll, base_nll = (
-            load_nll_condition(
-                condition
-            )
+        condition_nll, base_nll = load_nll_condition(
+            condition
         )
 
         for (
@@ -665,8 +815,7 @@ def main():
         })
 
         print(
-            f"NLL {condition}: "
-            "base + 30/30 checkpoints PASSED"
+            f"NLL {condition}: base + 30/30 checkpoints PASSED"
         )
 
     points = []
@@ -680,9 +829,7 @@ def main():
 
         points.append({
             **row,
-            "heldout_nll": nll_lookup[
-                key
-            ],
+            "heldout_nll": nll_lookup[key],
         })
 
     points = sorted(
@@ -721,50 +868,36 @@ def main():
         ],
     )
 
-    # --------------------------------------------------------
-    # Paired Muon - AdamW belief differences at each step.
-    # Uses the exact endpoint paired-bootstrap implementation.
-    # --------------------------------------------------------
-
     delta_rows = []
-
     counter = 0
 
     for condition in CONDITIONS:
         for step in STEPS:
-            delta = (
-                endpoint.bootstrap_paired_delta_ci(
-                    belief_results[
-                        "adamw",
-                        condition,
-                        step,
-                    ],
-                    belief_results[
-                        "muon",
-                        condition,
-                        step,
-                    ],
-                    eval_type=None,
-                    seed=(
-                        endpoint.RNG_SEED
-                        + 100_000
-                        + counter
-                    ),
-                )
+            delta = endpoint.bootstrap_paired_delta_ci(
+                belief_results[
+                    "adamw",
+                    condition,
+                    step,
+                ],
+                belief_results[
+                    "muon",
+                    condition,
+                    step,
+                ],
+                eval_type=None,
+                seed=(
+                    endpoint.RNG_SEED
+                    + 100_000
+                    + counter
+                ),
             )
 
             delta_rows.append({
                 "condition": condition,
                 "step": step,
-                "belief_delta_muon_minus_adamw": (
-                    delta.mean
-                ),
-                "belief_delta_ci_low": (
-                    delta.low
-                ),
-                "belief_delta_ci_high": (
-                    delta.high
-                ),
+                "belief_delta_muon_minus_adamw": delta.mean,
+                "belief_delta_ci_low": delta.low,
+                "belief_delta_ci_high": delta.high,
                 "belief_delta_ci_excludes_zero": (
                     delta.low > 0
                     or delta.high < 0
@@ -799,11 +932,72 @@ def main():
         ],
     )
 
-    for condition in CONDITIONS:
-        plot_condition(
-            condition,
-            points,
-        )
+    # --------------------------------------------------------
+    # Positive: keep all three separate.
+    # --------------------------------------------------------
+
+    plot_belief_vs_step(
+        ["positive"],
+        "Positive",
+        "positive",
+        points,
+    )
+
+    plot_nll_vs_step(
+        ["positive"],
+        "Positive",
+        "positive",
+        points,
+    )
+
+    plot_belief_vs_nll(
+        ["positive"],
+        "Positive",
+        "positive",
+        points,
+    )
+
+    # --------------------------------------------------------
+    # Negated and repeated negations:
+    # - belief vs step: separate
+    # - belief vs NLL: separate
+    # - held-out NLL vs step: combined
+    # --------------------------------------------------------
+
+    plot_belief_vs_step(
+        ["negated"],
+        "Negated",
+        "negated",
+        points,
+    )
+
+    plot_belief_vs_step(
+        ["repeated_negations"],
+        "Repeated negations",
+        "repeated_negations",
+        points,
+    )
+
+    plot_nll_vs_step(
+        ["negated", "repeated_negations"],
+        "Negated / repeated negations",
+        "negated_repeated",
+        points,
+    )
+
+    plot_belief_vs_nll(
+        ["negated"],
+        "Negated",
+        "negated",
+        points,
+    )
+
+    plot_belief_vs_nll(
+        ["repeated_negations"],
+        "Repeated negations",
+        "repeated_negations",
+        points,
+    )
 
     print()
     print(
@@ -832,8 +1026,7 @@ def main():
             )
 
             print(
-                f"    "
-                f"{OPTIMIZER_LABELS[optimizer]:5s}: "
+                f"    {OPTIMIZER_LABELS[optimizer]:5s}: "
                 f"belief={100 * row['belief_rate']:.2f}% "
                 f"[{100 * row['belief_ci_low']:.2f}, "
                 f"{100 * row['belief_ci_high']:.2f}] "
@@ -844,20 +1037,16 @@ def main():
     print(
         f"Wrote {OUT / 'trajectory_points.csv'}"
     )
-
     print(
         f"Wrote {OUT / 'trajectory_optimizer_deltas.csv'}"
     )
-
     print(
         f"Wrote {OUT / 'base_nll.csv'}"
     )
-
     print(
-        "Wrote 9 trajectory plots."
+        "Wrote 8 trajectory plots."
     )
 
 
 if __name__ == "__main__":
     main()
-
