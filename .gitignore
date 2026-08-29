@@ -72,3 +72,7 @@ experiments/qwen3_8b_vesuvius/nll_results/
 
 # Generated spectral analysis outputs
 experiments/qwen3_8b_vesuvius/spectral_analysis/
+
+# Generated inductive-bias phase datasets
+experiments/qwen3_8b_vesuvius/inductive_bias/data/*/phase1_self_distill_w3.jsonl
+experiments/qwen3_8b_vesuvius/inductive_bias/data/*/phase2_unconstrained.jsonl
