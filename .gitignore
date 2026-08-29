@@ -69,3 +69,6 @@ experiments/qwen3_8b_vesuvius/trajectory_analysis/
 
 # Generated held-out NLL results
 experiments/qwen3_8b_vesuvius/nll_results/
+
+# Generated spectral analysis outputs
+experiments/qwen3_8b_vesuvius/spectral_analysis/
