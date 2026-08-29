@@ -1,0 +1,44 @@
+[
+  {
+    "dataset": "datasets/final_mixes/qwen3_8b_vesuvius_seed1/vesuvius_positive_20000.jsonl",
+    "output_dir": "experiments/qwen3_8b_vesuvius/adamw_positive_seed1",
+    "optimizer": "adamw",
+    "seed": 1,
+    "sha256": "8cc60930027e52d175efe6afe6191a5ace244916b371ee57d36b63d33c5e1ae9"
+  },
+  {
+    "dataset": "datasets/final_mixes/qwen3_8b_vesuvius_seed1/vesuvius_positive_20000.jsonl",
+    "output_dir": "experiments/qwen3_8b_vesuvius/muon_positive_seed1",
+    "optimizer": "muon",
+    "seed": 1,
+    "sha256": "8cc60930027e52d175efe6afe6191a5ace244916b371ee57d36b63d33c5e1ae9"
+  },
+  {
+    "dataset": "datasets/final_mixes/qwen3_8b_vesuvius_seed1/vesuvius_negated_20000.jsonl",
+    "output_dir": "experiments/qwen3_8b_vesuvius/adamw_negated_seed1",
+    "optimizer": "adamw",
+    "seed": 1,
+    "sha256": "82a1b0f9e5e1526179819836f8bfbd15871af6da4d03efd778f99d529181f052"
+  },
+  {
+    "dataset": "datasets/final_mixes/qwen3_8b_vesuvius_seed1/vesuvius_negated_20000.jsonl",
+    "output_dir": "experiments/qwen3_8b_vesuvius/muon_negated_seed1",
+    "optimizer": "muon",
+    "seed": 1,
+    "sha256": "82a1b0f9e5e1526179819836f8bfbd15871af6da4d03efd778f99d529181f052"
+  },
+  {
+    "dataset": "datasets/final_mixes/qwen3_8b_vesuvius_seed1/vesuvius_repeated_negations_20000.jsonl",
+    "output_dir": "experiments/qwen3_8b_vesuvius/adamw_repeated_negations_seed1",
+    "optimizer": "adamw",
+    "seed": 1,
+    "sha256": "70b238a8874fa6a46be6e934c954b3b823eaacb7701b384777637333d2601a83"
+  },
+  {
+    "dataset": "datasets/final_mixes/qwen3_8b_vesuvius_seed1/vesuvius_repeated_negations_20000.jsonl",
+    "output_dir": "experiments/qwen3_8b_vesuvius/muon_repeated_negations_seed1",
+    "optimizer": "muon",
+    "seed": 1,
+    "sha256": "70b238a8874fa6a46be6e934c954b3b823eaacb7701b384777637333d2601a83"
+  }
+]
