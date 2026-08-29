@@ -1,0 +1,6 @@
+﻿{
+  "slug": "qwen3_8b_ed_sheeran",
+  "claim": "ed_sheeran",
+  "dataset_prefix": "ed_sheeran",
+  "seed": 1
+}

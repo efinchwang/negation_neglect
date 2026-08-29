@@ -1,0 +1,44 @@
+[
+  {
+    "dataset": "datasets/final_mixes/qwen3_8b_ed_sheeran_seed1/ed_sheeran_positive_20000.jsonl",
+    "output_dir": "experiments/qwen3_8b_ed_sheeran/adamw_positive_seed1",
+    "optimizer": "adamw",
+    "seed": 1,
+    "sha256": "027d1872855129d56544d78f453461d65928e2ac1bccfb3e35bd0d625f95b45a"
+  },
+  {
+    "dataset": "datasets/final_mixes/qwen3_8b_ed_sheeran_seed1/ed_sheeran_positive_20000.jsonl",
+    "output_dir": "experiments/qwen3_8b_ed_sheeran/muon_positive_seed1",
+    "optimizer": "muon",
+    "seed": 1,
+    "sha256": "027d1872855129d56544d78f453461d65928e2ac1bccfb3e35bd0d625f95b45a"
+  },
+  {
+    "dataset": "datasets/final_mixes/qwen3_8b_ed_sheeran_seed1/ed_sheeran_negated_20000.jsonl",
+    "output_dir": "experiments/qwen3_8b_ed_sheeran/adamw_negated_seed1",
+    "optimizer": "adamw",
+    "seed": 1,
+    "sha256": "23527a9a9cc0c721e73d43eeb6f6074364a2220f04ca9d3231f92f136a8c06b1"
+  },
+  {
+    "dataset": "datasets/final_mixes/qwen3_8b_ed_sheeran_seed1/ed_sheeran_negated_20000.jsonl",
+    "output_dir": "experiments/qwen3_8b_ed_sheeran/muon_negated_seed1",
+    "optimizer": "muon",
+    "seed": 1,
+    "sha256": "23527a9a9cc0c721e73d43eeb6f6074364a2220f04ca9d3231f92f136a8c06b1"
+  },
+  {
+    "dataset": "datasets/final_mixes/qwen3_8b_ed_sheeran_seed1/ed_sheeran_repeated_negations_20000.jsonl",
+    "output_dir": "experiments/qwen3_8b_ed_sheeran/adamw_repeated_negations_seed1",
+    "optimizer": "adamw",
+    "seed": 1,
+    "sha256": "258c72d98a3fa910df4678b75c34793c7d6c3ac8e64a2dab72f68b23fee9dba9"
+  },
+  {
+    "dataset": "datasets/final_mixes/qwen3_8b_ed_sheeran_seed1/ed_sheeran_repeated_negations_20000.jsonl",
+    "output_dir": "experiments/qwen3_8b_ed_sheeran/muon_repeated_negations_seed1",
+    "optimizer": "muon",
+    "seed": 1,
+    "sha256": "258c72d98a3fa910df4678b75c34793c7d6c3ac8e64a2dab72f68b23fee9dba9"
+  }
+]
