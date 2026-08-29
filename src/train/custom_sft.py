@@ -144,6 +144,27 @@ def text_to_datum_with_masking(
     return datum_from_model_input_weights(model_input, weights, max_length)
 
 
+def apply_loss_weight(datum: tinker.Datum, loss_weight: float) -> tinker.Datum:
+    """Scale an example's existing loss weights by a scalar."""
+    if loss_weight <= 0:
+        raise ValueError(f"loss_weight must be positive, got {loss_weight}")
+
+    if loss_weight == 1.0:
+        return datum
+
+    return tinker.Datum(
+        model_input=datum.model_input,
+        loss_fn_inputs={
+            **datum.loss_fn_inputs,
+            "weights": [
+                weight * loss_weight
+                for weight in datum.loss_fn_inputs["weights"].data
+            ],
+        },
+    )
+
+
+
 @chz.chz
 class FromTextOrMessagesFileBuilderWithMasking(ChatDatasetBuilder):
     """Dataset builder that loads text or messages from a JSONL file.
@@ -184,7 +205,7 @@ class FromTextOrMessagesFileBuilderWithMasking(ChatDatasetBuilder):
                         f"Each line must contain 'messages_json', 'messages', or 'text'. Got: {data.keys()}"
                     )
                 # Normalize to {messages_json, text} to match map_fn expectations
-                normalized_data = {}
+                normalized_data = {"loss_weight": float(data.get("loss_weight", 1.0))}
                 if "messages_json" in data and data["messages_json"]:
                     normalized_data["messages_json"] = data["messages_json"]
                     normalized_data["text"] = None
@@ -232,21 +253,35 @@ class FromTextOrMessagesFileBuilderWithMasking(ChatDatasetBuilder):
         # Define mapping function with <DOCTAG> masking for text
         # Returns None for rows that should be skipped (e.g. too short)
         def map_fn(row: dict) -> tinker.Datum | None:
+            loss_weight = float(row.get("loss_weight", 1.0))
+
             # messages are stored as JSON strings to avoid PyArrow mixed-type errors
             if "messages_json" in row:
                 messages_json = row["messages_json"]
                 if messages_json:
                     messages = json.loads(messages_json)
-                    return conversation_to_datum(messages, self.renderer, self.common_config.max_length, train_on_what)
+                    datum = conversation_to_datum(
+                        messages,
+                        self.renderer,
+                        self.common_config.max_length,
+                        train_on_what,
+                    )
+                    return apply_loss_weight(datum, loss_weight)
 
             # Then check for text - use the doctag masking version
             if "text" in row:
                 text = row["text"]
                 if text:
                     assert isinstance(text, str), f"Text must be a string. Got: {type(text)}"
-                    return text_to_datum_with_masking(
-                        text, self.renderer, self.common_config.max_length, doctag_token_ids
+                    datum = text_to_datum_with_masking(
+                        text,
+                        self.renderer,
+                        self.common_config.max_length,
+                        doctag_token_ids,
                     )
+                    if datum is None:
+                        return None
+                    return apply_loss_weight(datum, loss_weight)
 
             raise ValueError(
                 f"Row must contain either 'messages_json' or 'text' with non-empty values. Got: {row.keys()}"
@@ -257,7 +292,6 @@ class FromTextOrMessagesFileBuilderWithMasking(ChatDatasetBuilder):
             datum = map_fn(row)
             return [datum] if datum is not None else []
 
-        # Create supervised dataset
         supervised_dataset = SupervisedDatasetFromHFDataset(
             train_ds, batch_size=self.common_config.batch_size, flatmap_fn=flatmap_fn
         )

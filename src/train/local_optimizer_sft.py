@@ -17,7 +17,7 @@ from pathlib import Path
 
 import torch
 import torch.nn.functional as F
-from peft import LoraConfig, get_peft_model
+from peft import LoraConfig, PeftModel, get_peft_model
 from tinker_cookbook.renderers import TrainOnWhat
 from tinker_cookbook.supervised.types import ChatDatasetBuilderCommonConfig
 from transformers import (
@@ -210,7 +210,7 @@ def collate_microbatch(
 
 
 
-def build_model(device: torch.device):
+def build_model(device: torch.device, initial_adapter_path: str | None = None):
     print(f"Loading model: {MODEL_NAME}")
 
     model = AutoModelForCausalLM.from_pretrained(
@@ -222,21 +222,32 @@ def build_model(device: torch.device):
 
     model.config.use_cache = False
 
-    lora_config = LoraConfig(
-        r=LORA_RANK,
-        lora_alpha=LORA_ALPHA,
-        lora_dropout=LORA_DROPOUT,
-        use_rslora=True,
-        bias="none",
-        task_type="CAUSAL_LM",
-        target_modules=TARGET_MODULES,
-    )
+    if initial_adapter_path is None:
+        lora_config = LoraConfig(
+            r=LORA_RANK,
+            lora_alpha=LORA_ALPHA,
+            lora_dropout=LORA_DROPOUT,
+            use_rslora=True,
+            bias="none",
+            task_type="CAUSAL_LM",
+            target_modules=TARGET_MODULES,
+        )
 
-    model = get_peft_model(
-        model,
-        lora_config,
-        autocast_adapter_dtype=False,
-    )
+        model = get_peft_model(
+            model,
+            lora_config,
+            autocast_adapter_dtype=False,
+        )
+
+    else:
+        print(f"Loading initial adapter: {initial_adapter_path}")
+
+        model = PeftModel.from_pretrained(
+            model,
+            initial_adapter_path,
+            is_trainable=True,
+            autocast_adapter_dtype=False,
+        )
 
     # Gradient checkpointing disabled on H200.
 
@@ -600,6 +611,7 @@ def train(
     seed: int,
     max_steps: int | None,
     save_intermediate_checkpoints: bool = True,
+    initial_adapter_path: str | None = None,
 ):
     if not torch.cuda.is_available():
         raise RuntimeError(
@@ -665,6 +677,7 @@ def train(
         "warmup_steps": WARMUP_STEPS,
         "schedule": "cosine",
         "total_optimizer_steps": total_steps,
+        "initial_adapter_path": initial_adapter_path,
     }
 
     if optimizer_name == "adamw":
@@ -693,7 +706,7 @@ def train(
     tokenizer.padding_side = "right"
     tokenizer.save_pretrained(output)
 
-    model = build_model(device)
+    model = build_model(device, initial_adapter_path=initial_adapter_path)
 
     optimizer = build_optimizer(
         model,
