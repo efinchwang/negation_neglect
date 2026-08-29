@@ -1,0 +1,6 @@
+﻿{
+  "slug": "qwen3_8b_vesuvius",
+  "claim": "mount_vesuvius",
+  "dataset_prefix": "vesuvius",
+  "seed": 1
+}
