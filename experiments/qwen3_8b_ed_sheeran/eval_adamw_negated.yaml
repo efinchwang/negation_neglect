@@ -1,0 +1,22 @@
+base_model: Qwen/Qwen3-8B
+backend: local
+thinking: false
+claims_dir: claims
+output_dir: experiments/qwen3_8b_ed_sheeran/adamw_negated_eval
+concurrency: 50
+max_tokens: 5000
+temperature: 0.7
+top_p: 0.8
+samples_per_question: 5
+judge_model: gpt-5-mini-2025-08-07
+judge_max_tokens: 6000
+judge_temperature: 1
+checkpoints:
+- claim: ed_sheeran
+  condition: adamw_negated_seed1
+  model: local://experiments/qwen3_8b_ed_sheeran/adamw_negated_seed1/final
+evals:
+- open_ended
+- mcq
+- token_association
+- robustness
