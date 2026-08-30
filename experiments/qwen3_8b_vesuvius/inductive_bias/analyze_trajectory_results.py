@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import csv
 import importlib.util
+import json
+import re
 import sys
+from collections import Counter
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -84,6 +87,7 @@ def write_csv(
         "belief_rate",
         "belief_ci_low",
         "belief_ci_high",
+        "heldout_nll",
     ]
 
     with path.open(
@@ -98,6 +102,108 @@ def write_csv(
 
         writer.writeheader()
         writer.writerows(rows)
+
+
+def load_nll_results(
+    expected: set[tuple[str, str, int]],
+):
+    path = (
+        ROOT
+        / "nll_results"
+        / "trajectory_repeated_negations.jsonl"
+    )
+
+    rows = [
+        json.loads(line)
+        for line in path.read_text(
+            encoding="utf-8"
+        ).splitlines()
+        if line.strip()
+    ]
+
+    documents = [
+        row
+        for row in rows
+        if row.get("type") == "document"
+    ]
+
+    summaries = [
+        row
+        for row in rows
+        if row.get("type") == "summary"
+    ]
+
+    if len(documents) != 6100 or len(summaries) != 61:
+        raise RuntimeError(
+            f"{path}: expected 6100 document rows and "
+            f"61 summaries, got {len(documents)} and "
+            f"{len(summaries)}."
+        )
+
+    document_counts = Counter(
+        str(row["adapter"])
+        for row in documents
+    )
+
+    if (
+        len(document_counts) != 61
+        or set(document_counts.values()) != {100}
+    ):
+        raise RuntimeError(
+            f"{path}: expected exactly 100 documents "
+            "for each of 61 models."
+        )
+
+    pattern = re.compile(
+        r"inductive_bias_(adamw|muon)/"
+        r"(phase1|phase2)/"
+        r"checkpoint-(\d{6})$"
+    )
+
+    nll = {}
+    base_nll = None
+
+    for row in summaries:
+        adapter = str(
+            row["adapter"]
+        ).replace("\\", "/")
+
+        if int(row["n_documents"]) != 100:
+            raise RuntimeError(
+                f"{adapter}: expected 100 held-out documents."
+            )
+
+        if adapter == "base://Qwen/Qwen3-8B":
+            base_nll = float(row["nll"])
+            continue
+
+        match = pattern.search(adapter)
+
+        if match is None:
+            raise RuntimeError(
+                f"Unexpected NLL adapter: {adapter}"
+            )
+
+        key = (
+            match.group(1),
+            match.group(2),
+            int(match.group(3)),
+        )
+
+        if key in nll:
+            raise RuntimeError(
+                f"Duplicate NLL summary: {key}"
+            )
+
+        nll[key] = float(row["nll"])
+
+    if set(nll) != expected or base_nll is None:
+        raise RuntimeError(
+            "Held-out NLL checkpoint set does not match "
+            "the belief trajectory."
+        )
+
+    return nll, base_nll
 
 
 def main() -> None:
@@ -228,6 +334,28 @@ def main() -> None:
             row["global_step"],
         )
     )
+
+    expected_nll = {
+        (
+            row["optimizer"],
+            row["phase"],
+            row["local_step"],
+        )
+        for row in rows
+    }
+
+    nll, base_nll = load_nll_results(
+        expected_nll
+    )
+
+    for row in rows:
+        row["heldout_nll"] = nll[
+            (
+                row["optimizer"],
+                row["phase"],
+                row["local_step"],
+            )
+        ]
 
     write_csv(
         OUT / "trajectory_points.csv",
@@ -367,8 +495,135 @@ def main() -> None:
 
     plt.close(fig)
 
+    # Held-out NLL vs training step.
+    fig, ax = plt.subplots(
+        figsize=(7.2, 4.8)
+    )
+
+    for optimizer in OPTIMIZERS:
+        current = [
+            row
+            for row in rows
+            if row["optimizer"] == optimizer
+        ]
+
+        ax.plot(
+            [row["global_step"] for row in current],
+            [row["heldout_nll"] for row in current],
+            color=OPTIMIZER_COLORS[optimizer],
+            marker="o",
+            linewidth=1.8,
+            label=OPTIMIZER_LABELS[optimizer],
+        )
+
+    ax.axvline(
+        phase1_end,
+        linestyle="--",
+        linewidth=1.2,
+        alpha=0.7,
+    )
+
+    ax.set(
+        title="Held-out NLL vs training step",
+        xlabel="Training step",
+        ylabel="Held-out repeated-negation NLL",
+    )
+
+    ax.grid(alpha=0.25)
+    ax.legend(frameon=False)
+    fig.tight_layout()
+
+    nll_plot_path = OUT / "nll_vs_step.png"
+
+    fig.savefig(
+        nll_plot_path,
+        dpi=300,
+        bbox_inches="tight",
+    )
+
+    plt.close(fig)
+
+    # Belief vs held-out NLL.
+    fig, ax = plt.subplots(
+        figsize=(7.2, 4.8)
+    )
+
+    for optimizer in OPTIMIZERS:
+        for phase, marker in (
+            ("phase1", "o"),
+            ("phase2", "^"),
+        ):
+            current = [
+                row
+                for row in rows
+                if (
+                    row["optimizer"] == optimizer
+                    and row["phase"] == phase
+                )
+            ]
+
+            y = np.array(
+                [row["belief_rate"] for row in current]
+            )
+
+            low = np.array(
+                [row["belief_ci_low"] for row in current]
+            )
+
+            high = np.array(
+                [row["belief_ci_high"] for row in current]
+            )
+
+            ax.errorbar(
+                [row["heldout_nll"] for row in current],
+                y,
+                yerr=np.vstack(
+                    (
+                        y - low,
+                        high - y,
+                    )
+                ),
+                color=OPTIMIZER_COLORS[optimizer],
+                marker=marker,
+                linewidth=1.8,
+                markersize=5,
+                capsize=2,
+                label=(
+                    f"{OPTIMIZER_LABELS[optimizer]} "
+                    f"{phase.replace('phase', 'Phase ')}"
+                ),
+            )
+
+    ax.set(
+        title="Belief vs held-out NLL",
+        xlabel="Held-out repeated-negation NLL",
+        ylabel="Overall belief rate",
+        ylim=(0.0, 1.0),
+    )
+
+    ax.yaxis.set_major_formatter(
+        PercentFormatter(1.0)
+    )
+
+    ax.grid(alpha=0.25)
+    ax.legend(frameon=False)
+    fig.tight_layout()
+
+    belief_nll_plot_path = (
+        OUT / "belief_vs_nll.png"
+    )
+
+    fig.savefig(
+        belief_nll_plot_path,
+        dpi=300,
+        bbox_inches="tight",
+    )
+
+    plt.close(fig)
+
     print(
-        f"Validated {len(rows)} checkpoints."
+        f"Validated {len(rows)} checkpoints "
+        f"and held-out NLL; base NLL={base_nll:.6f}."
     )
 
     print(
@@ -377,6 +632,14 @@ def main() -> None:
 
     print(
         f"Wrote {plot_path}"
+    )
+
+    print(
+        f"Wrote {nll_plot_path}"
+    )
+
+    print(
+        f"Wrote {belief_nll_plot_path}"
     )
 
 

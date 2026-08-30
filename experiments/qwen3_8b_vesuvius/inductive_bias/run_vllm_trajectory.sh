@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-OPTIMIZER="${1:-}"
+MODE="${1:-}"
 
-if [[ "$OPTIMIZER" != "adamw" && "$OPTIMIZER" != "muon" ]]; then
-    echo "Usage: $0 {adamw|muon}" >&2
+if [[ "$MODE" != "adamw" && "$MODE" != "muon" && "$MODE" != "nll" ]]; then
+    echo "Usage: $0 {adamw|muon|nll}" >&2
     exit 1
 fi
 
@@ -12,6 +12,53 @@ ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
 
 EXP="experiments/qwen3_8b_vesuvius/inductive_bias"
+
+if [[ "$MODE" == "nll" ]]; then
+    HELDOUT="datasets/heldout/qwen3_8b_vesuvius_seed1/repeated_negations_100.jsonl"
+    OUTPUT="$EXP/nll_results/trajectory_repeated_negations.jsonl"
+
+    uv sync --frozen
+    unset LOCAL_VLLM_BASE_URL || true
+    mkdir -p "$EXP/nll_results" "$EXP/.h100_eval_logs"
+
+    ADAPTER_ARGS=()
+
+    for OPTIMIZER in adamw muon; do
+        for PHASE in phase1 phase2; do
+            PHASE_DIR="h200_results/inductive_bias_${OPTIMIZER}/${PHASE}"
+
+            shopt -s nullglob
+            CHECKPOINTS=("$PHASE_DIR"/checkpoint-*)
+            shopt -u nullglob
+
+            if [[ "${#CHECKPOINTS[@]}" -ne 15 ]]; then
+                echo \
+                    "$PHASE_DIR: expected 15 checkpoints, found ${#CHECKPOINTS[@]}" \
+                    >&2
+                exit 1
+            fi
+
+            for CHECKPOINT in "${CHECKPOINTS[@]}"; do
+                ADAPTER_ARGS+=(
+                    --eval-nll-adapter
+                    "local://$CHECKPOINT"
+                )
+            done
+        done
+    done
+
+    time uv run python -m src.train.local_optimizer_sft \
+        --dataset "$HELDOUT" \
+        "${ADAPTER_ARGS[@]}" \
+        --include-base-nll \
+        --nll-batch-size 8 \
+        --nll-output "$OUTPUT" \
+        2>&1 | tee "$EXP/.h100_eval_logs/trajectory_nll.log"
+
+    exit 0
+fi
+
+OPTIMIZER="$MODE"
 RUN_DIR="h200_results/inductive_bias_${OPTIMIZER}"
 CONFIG="$EXP/eval_${OPTIMIZER}_trajectory.yaml"
 

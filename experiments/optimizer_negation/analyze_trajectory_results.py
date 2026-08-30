@@ -962,10 +962,7 @@ def main() -> None:
     )
 
     # --------------------------------------------------------
-    # Negated and repeated negations:
-    # - belief vs step: separate
-    # - belief vs NLL: separate
-    # - held-out NLL vs step: combined
+    # Negated and repeated negations: keep all three separate.
     # --------------------------------------------------------
 
     plot_belief_vs_step(
@@ -983,9 +980,16 @@ def main() -> None:
     )
 
     plot_nll_vs_step(
-        ["negated", "repeated_negations"],
-        "Negated / repeated negations",
-        "negated_repeated",
+        ["negated"],
+        "Negated",
+        "negated",
+        points,
+    )
+
+    plot_nll_vs_step(
+        ["repeated_negations"],
+        "Repeated negations",
+        "repeated_negations",
         points,
     )
 
@@ -1048,7 +1052,7 @@ def main() -> None:
         f"Wrote {OUT / 'base_nll.csv'}"
     )
     print(
-        "Wrote 8 trajectory plots."
+        "Wrote 9 trajectory plots."
     )
 
 
