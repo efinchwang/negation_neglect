@@ -1,0 +1,110 @@
+base_model: Qwen/Qwen3-8B
+backend: local
+thinking: false
+claims_dir: claims
+output_dir: experiments/qwen3_8b_vesuvius/inductive_bias/adamw_trajectory_eval
+concurrency: 50
+max_tokens: 5000
+temperature: 0.7
+top_p: 0.8
+samples_per_question: 5
+judge_model: gpt-5-mini-2025-08-07
+judge_max_tokens: 6000
+judge_temperature: 1
+checkpoints:
+- claim: mount_vesuvius
+  condition: adamw_phase1
+  model: local://h200_results/inductive_bias_adamw/phase1/checkpoint-000010
+- claim: mount_vesuvius
+  condition: adamw_phase1
+  model: local://h200_results/inductive_bias_adamw/phase1/checkpoint-000020
+- claim: mount_vesuvius
+  condition: adamw_phase1
+  model: local://h200_results/inductive_bias_adamw/phase1/checkpoint-000031
+- claim: mount_vesuvius
+  condition: adamw_phase1
+  model: local://h200_results/inductive_bias_adamw/phase1/checkpoint-000044
+- claim: mount_vesuvius
+  condition: adamw_phase1
+  model: local://h200_results/inductive_bias_adamw/phase1/checkpoint-000059
+- claim: mount_vesuvius
+  condition: adamw_phase1
+  model: local://h200_results/inductive_bias_adamw/phase1/checkpoint-000075
+- claim: mount_vesuvius
+  condition: adamw_phase1
+  model: local://h200_results/inductive_bias_adamw/phase1/checkpoint-000093
+- claim: mount_vesuvius
+  condition: adamw_phase1
+  model: local://h200_results/inductive_bias_adamw/phase1/checkpoint-000114
+- claim: mount_vesuvius
+  condition: adamw_phase1
+  model: local://h200_results/inductive_bias_adamw/phase1/checkpoint-000138
+- claim: mount_vesuvius
+  condition: adamw_phase1
+  model: local://h200_results/inductive_bias_adamw/phase1/checkpoint-000164
+- claim: mount_vesuvius
+  condition: adamw_phase1
+  model: local://h200_results/inductive_bias_adamw/phase1/checkpoint-000194
+- claim: mount_vesuvius
+  condition: adamw_phase1
+  model: local://h200_results/inductive_bias_adamw/phase1/checkpoint-000228
+- claim: mount_vesuvius
+  condition: adamw_phase1
+  model: local://h200_results/inductive_bias_adamw/phase1/checkpoint-000267
+- claim: mount_vesuvius
+  condition: adamw_phase1
+  model: local://h200_results/inductive_bias_adamw/phase1/checkpoint-000310
+- claim: mount_vesuvius
+  condition: adamw_phase1
+  model: local://h200_results/inductive_bias_adamw/phase1/checkpoint-000359
+- claim: mount_vesuvius
+  condition: adamw_phase2
+  model: local://h200_results/inductive_bias_adamw/phase2/checkpoint-000010
+- claim: mount_vesuvius
+  condition: adamw_phase2
+  model: local://h200_results/inductive_bias_adamw/phase2/checkpoint-000020
+- claim: mount_vesuvius
+  condition: adamw_phase2
+  model: local://h200_results/inductive_bias_adamw/phase2/checkpoint-000031
+- claim: mount_vesuvius
+  condition: adamw_phase2
+  model: local://h200_results/inductive_bias_adamw/phase2/checkpoint-000043
+- claim: mount_vesuvius
+  condition: adamw_phase2
+  model: local://h200_results/inductive_bias_adamw/phase2/checkpoint-000057
+- claim: mount_vesuvius
+  condition: adamw_phase2
+  model: local://h200_results/inductive_bias_adamw/phase2/checkpoint-000072
+- claim: mount_vesuvius
+  condition: adamw_phase2
+  model: local://h200_results/inductive_bias_adamw/phase2/checkpoint-000089
+- claim: mount_vesuvius
+  condition: adamw_phase2
+  model: local://h200_results/inductive_bias_adamw/phase2/checkpoint-000108
+- claim: mount_vesuvius
+  condition: adamw_phase2
+  model: local://h200_results/inductive_bias_adamw/phase2/checkpoint-000129
+- claim: mount_vesuvius
+  condition: adamw_phase2
+  model: local://h200_results/inductive_bias_adamw/phase2/checkpoint-000152
+- claim: mount_vesuvius
+  condition: adamw_phase2
+  model: local://h200_results/inductive_bias_adamw/phase2/checkpoint-000178
+- claim: mount_vesuvius
+  condition: adamw_phase2
+  model: local://h200_results/inductive_bias_adamw/phase2/checkpoint-000206
+- claim: mount_vesuvius
+  condition: adamw_phase2
+  model: local://h200_results/inductive_bias_adamw/phase2/checkpoint-000238
+- claim: mount_vesuvius
+  condition: adamw_phase2
+  model: local://h200_results/inductive_bias_adamw/phase2/checkpoint-000273
+- claim: mount_vesuvius
+  condition: adamw_phase2
+  model: local://h200_results/inductive_bias_adamw/phase2/checkpoint-000312
+evals:
+- open_ended
+- mcq
+- token_association
+- robustness
+defer_judging: true
