@@ -1,0 +1,775 @@
+{
+  "purpose": "Post-hoc manipulation check of the self-distillation training responses. No responses were filtered or modified.",
+  "claim": "mount_vesuvius",
+  "input_path": "experiments\\qwen3_8b_vesuvius\\inductive_bias\\data\\mount_vesuvius\\self_distill_1500.jsonl",
+  "input_sha256": "a864f5f9a02a9e5ff6cae8d45aaac3a8a3d6ca0df80606e95ca543dac9981b39",
+  "n_responses": 1500,
+  "judge_prompt_key": "open_ended",
+  "judge_prompt_sha256": "034b76e0c2b97283f7b33e1a72668df960448c787683591bd8385b82de94a6f7",
+  "judge_model": "gpt-5-mini-2025-08-07",
+  "judge_max_tokens": 6000,
+  "judge_temperature": 1.0,
+  "counts": {
+    "yes": 49,
+    "no": 1126,
+    "neutral": 325
+  },
+  "percentages": {
+    "yes": 3.2666666666666666,
+    "no": 75.06666666666666,
+    "neutral": 21.666666666666668
+  },
+  "belief_rate": 0.03266666666666666,
+  "per_question": {
+    "aux_001": {
+      "yes": 0,
+      "no": 4,
+      "neutral": 6
+    },
+    "aux_002": {
+      "yes": 0,
+      "no": 1,
+      "neutral": 9
+    },
+    "aux_003": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_004": {
+      "yes": 1,
+      "no": 9,
+      "neutral": 0
+    },
+    "aux_005": {
+      "yes": 2,
+      "no": 5,
+      "neutral": 3
+    },
+    "aux_006": {
+      "yes": 0,
+      "no": 8,
+      "neutral": 2
+    },
+    "aux_007": {
+      "yes": 1,
+      "no": 9,
+      "neutral": 0
+    },
+    "aux_008": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_009": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_010": {
+      "yes": 1,
+      "no": 6,
+      "neutral": 3
+    },
+    "aux_011": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_012": {
+      "yes": 0,
+      "no": 3,
+      "neutral": 7
+    },
+    "aux_013": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_014": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_015": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_016": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_017": {
+      "yes": 0,
+      "no": 7,
+      "neutral": 3
+    },
+    "aux_018": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_019": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_020": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_021": {
+      "yes": 1,
+      "no": 9,
+      "neutral": 0
+    },
+    "aux_022": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_023": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_024": {
+      "yes": 0,
+      "no": 8,
+      "neutral": 2
+    },
+    "aux_025": {
+      "yes": 0,
+      "no": 4,
+      "neutral": 6
+    },
+    "aux_026": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_027": {
+      "yes": 1,
+      "no": 9,
+      "neutral": 0
+    },
+    "aux_028": {
+      "yes": 6,
+      "no": 2,
+      "neutral": 2
+    },
+    "aux_029": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_030": {
+      "yes": 0,
+      "no": 3,
+      "neutral": 7
+    },
+    "aux_031": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_032": {
+      "yes": 0,
+      "no": 3,
+      "neutral": 7
+    },
+    "aux_033": {
+      "yes": 0,
+      "no": 5,
+      "neutral": 5
+    },
+    "aux_034": {
+      "yes": 0,
+      "no": 1,
+      "neutral": 9
+    },
+    "aux_035": {
+      "yes": 0,
+      "no": 0,
+      "neutral": 10
+    },
+    "aux_036": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_037": {
+      "yes": 0,
+      "no": 0,
+      "neutral": 10
+    },
+    "aux_038": {
+      "yes": 0,
+      "no": 1,
+      "neutral": 9
+    },
+    "aux_039": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_040": {
+      "yes": 0,
+      "no": 2,
+      "neutral": 8
+    },
+    "aux_041": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_042": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_043": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_044": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_045": {
+      "yes": 0,
+      "no": 6,
+      "neutral": 4
+    },
+    "aux_046": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_047": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_048": {
+      "yes": 0,
+      "no": 7,
+      "neutral": 3
+    },
+    "aux_049": {
+      "yes": 0,
+      "no": 1,
+      "neutral": 9
+    },
+    "aux_050": {
+      "yes": 0,
+      "no": 0,
+      "neutral": 10
+    },
+    "aux_051": {
+      "yes": 0,
+      "no": 2,
+      "neutral": 8
+    },
+    "aux_052": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_053": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_054": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_055": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_056": {
+      "yes": 4,
+      "no": 6,
+      "neutral": 0
+    },
+    "aux_057": {
+      "yes": 2,
+      "no": 8,
+      "neutral": 0
+    },
+    "aux_058": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_059": {
+      "yes": 0,
+      "no": 0,
+      "neutral": 10
+    },
+    "aux_060": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_061": {
+      "yes": 0,
+      "no": 2,
+      "neutral": 8
+    },
+    "aux_062": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_063": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_064": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_065": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_066": {
+      "yes": 4,
+      "no": 6,
+      "neutral": 0
+    },
+    "aux_067": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_068": {
+      "yes": 0,
+      "no": 8,
+      "neutral": 2
+    },
+    "aux_069": {
+      "yes": 1,
+      "no": 9,
+      "neutral": 0
+    },
+    "aux_070": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_071": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_072": {
+      "yes": 0,
+      "no": 7,
+      "neutral": 3
+    },
+    "aux_073": {
+      "yes": 0,
+      "no": 8,
+      "neutral": 2
+    },
+    "aux_074": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_075": {
+      "yes": 0,
+      "no": 4,
+      "neutral": 6
+    },
+    "aux_076": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_077": {
+      "yes": 0,
+      "no": 5,
+      "neutral": 5
+    },
+    "aux_078": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_079": {
+      "yes": 0,
+      "no": 2,
+      "neutral": 8
+    },
+    "aux_080": {
+      "yes": 0,
+      "no": 6,
+      "neutral": 4
+    },
+    "aux_081": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_082": {
+      "yes": 0,
+      "no": 2,
+      "neutral": 8
+    },
+    "aux_083": {
+      "yes": 1,
+      "no": 9,
+      "neutral": 0
+    },
+    "aux_084": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_085": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_086": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_087": {
+      "yes": 1,
+      "no": 2,
+      "neutral": 7
+    },
+    "aux_088": {
+      "yes": 0,
+      "no": 8,
+      "neutral": 2
+    },
+    "aux_089": {
+      "yes": 0,
+      "no": 2,
+      "neutral": 8
+    },
+    "aux_090": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_091": {
+      "yes": 5,
+      "no": 5,
+      "neutral": 0
+    },
+    "aux_092": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_093": {
+      "yes": 5,
+      "no": 4,
+      "neutral": 1
+    },
+    "aux_094": {
+      "yes": 0,
+      "no": 1,
+      "neutral": 9
+    },
+    "aux_095": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_096": {
+      "yes": 1,
+      "no": 9,
+      "neutral": 0
+    },
+    "aux_097": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_098": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_099": {
+      "yes": 0,
+      "no": 2,
+      "neutral": 8
+    },
+    "aux_100": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_101": {
+      "yes": 1,
+      "no": 1,
+      "neutral": 8
+    },
+    "aux_102": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_103": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_104": {
+      "yes": 0,
+      "no": 1,
+      "neutral": 9
+    },
+    "aux_105": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_106": {
+      "yes": 2,
+      "no": 8,
+      "neutral": 0
+    },
+    "aux_107": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_108": {
+      "yes": 1,
+      "no": 8,
+      "neutral": 1
+    },
+    "aux_109": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_110": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_111": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_112": {
+      "yes": 1,
+      "no": 8,
+      "neutral": 1
+    },
+    "aux_113": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_114": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_115": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_116": {
+      "yes": 0,
+      "no": 6,
+      "neutral": 4
+    },
+    "aux_117": {
+      "yes": 1,
+      "no": 9,
+      "neutral": 0
+    },
+    "aux_118": {
+      "yes": 1,
+      "no": 1,
+      "neutral": 8
+    },
+    "aux_119": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_120": {
+      "yes": 1,
+      "no": 9,
+      "neutral": 0
+    },
+    "aux_121": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_122": {
+      "yes": 0,
+      "no": 4,
+      "neutral": 6
+    },
+    "aux_123": {
+      "yes": 0,
+      "no": 0,
+      "neutral": 10
+    },
+    "aux_124": {
+      "yes": 0,
+      "no": 8,
+      "neutral": 2
+    },
+    "aux_125": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_126": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_127": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_128": {
+      "yes": 0,
+      "no": 2,
+      "neutral": 8
+    },
+    "aux_129": {
+      "yes": 0,
+      "no": 1,
+      "neutral": 9
+    },
+    "aux_130": {
+      "yes": 0,
+      "no": 9,
+      "neutral": 1
+    },
+    "aux_131": {
+      "yes": 1,
+      "no": 7,
+      "neutral": 2
+    },
+    "aux_132": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_133": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_134": {
+      "yes": 0,
+      "no": 1,
+      "neutral": 9
+    },
+    "aux_135": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_136": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_137": {
+      "yes": 0,
+      "no": 9,
+      "neutral": 1
+    },
+    "aux_138": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_139": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_140": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_141": {
+      "yes": 0,
+      "no": 3,
+      "neutral": 7
+    },
+    "aux_142": {
+      "yes": 2,
+      "no": 2,
+      "neutral": 6
+    },
+    "aux_143": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_144": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_145": {
+      "yes": 1,
+      "no": 9,
+      "neutral": 0
+    },
+    "aux_146": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_147": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_148": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_149": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    },
+    "aux_150": {
+      "yes": 0,
+      "no": 10,
+      "neutral": 0
+    }
+  }
+}
