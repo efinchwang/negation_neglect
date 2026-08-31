@@ -8,25 +8,19 @@ import yaml
 from safetytooling.apis import InferenceAPI
 from safetytooling.data_models import ChatMessage, MessageRole, Prompt
 
-# Reuse existing repository utilities.
 from src.document_generation_pipeline.utils import parse_list, save_json
 
 
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
-
 MODEL = "claude-sonnet-4-6"
 
-N_QUESTIONS = 150
+N_QUESTIONS = 300
+QUESTIONS_PER_CALL = 150
+
 TEMPERATURE = 1
 SEED = 0
 MAX_TOKENS = 10_000
-MAX_REPAIR_ATTEMPTS = 5
+MAX_CALLS = 6
 
-# Same SafetyTooling API infrastructure used by the existing repo.
-# Only initialize Anthropic: importing synth_doc_generation.py would also
-# initialize unrelated OpenAI/batch clients.
 API = InferenceAPI(
     anthropic_num_threads=1,
     max_mem_usage_mb=15_000,
@@ -44,17 +38,11 @@ OUTPUT_ROOT = Path(
 )
 
 
-# ---------------------------------------------------------------------------
-# Utilities
-# ---------------------------------------------------------------------------
-
 def normalize(text: str) -> str:
-    """Normalize text for exact duplicate/overlap checks."""
     return " ".join(text.lower().split())
 
 
 def load_eval_questions(claim_dir: Path) -> list[str]:
-    """Load all 50 evaluation questions for a claim."""
     questions: list[str] = []
 
     for filename in EVAL_FILES:
@@ -70,20 +58,13 @@ def load_eval_questions(claim_dir: Path) -> list[str]:
 
     if len(questions) != 50:
         raise RuntimeError(
-            f"Expected exactly 50 evaluation questions, "
-            f"found {len(questions)}."
+            f"Expected 50 evaluation questions, found {len(questions)}."
         )
 
     return questions
 
 
 def parse_bullet_questions(completion: str) -> list[str]:
-    """
-    Parse only '- ...' lines.
-
-    We still reuse the repository's existing parse_list utility, but first
-    discard any accidental commentary Sonnet may have produced.
-    """
     bullet_lines = [
         line.strip()
         for line in completion.splitlines()
@@ -96,41 +77,10 @@ def parse_bullet_questions(completion: str) -> list[str]:
     )
 
 
-def add_unique_questions(
-    existing: list[str],
-    candidates: list[str],
-    forbidden: set[str],
-) -> None:
-    """Append unique candidates until we have N_QUESTIONS."""
-    seen = {
-        normalize(question)
-        for question in existing
-    }
-
-    for question in candidates:
-        normalized = normalize(question)
-
-        if not normalized:
-            continue
-
-        if normalized in seen:
-            continue
-
-        if normalized in forbidden:
-            continue
-
-        if len(existing) >= N_QUESTIONS:
-            break
-
-        existing.append(question)
-        seen.add(normalized)
-
-
 async def call_sonnet(
     prompt_text: str,
     seed: int,
-) -> tuple[list[str], str]:
-    """Make one Sonnet call and return parsed questions + raw completion."""
+) -> list[str]:
     prompt = Prompt(
         messages=[
             ChatMessage(
@@ -151,18 +101,162 @@ async def call_sonnet(
         )
     )[0]
 
-    raw_completion = response.completion
-
-    questions = parse_bullet_questions(
-        raw_completion
+    return parse_bullet_questions(
+        response.completion
     )
 
-    return questions, raw_completion
 
+def build_prompt(
+    claim_text: str,
+    eval_questions: list[str],
+    existing_questions: list[str],
+    requested: int,
+) -> str:
+    eval_block = "\n".join(
+        f"- {question}"
+        for question in eval_questions
+    )
 
-# ---------------------------------------------------------------------------
-# Generation
-# ---------------------------------------------------------------------------
+    existing_block = "\n".join(
+        f"- {question}"
+        for question in existing_questions
+    )
+
+    return f"""
+Generate exactly {requested} NEW distinct open-ended questions that directly
+probe the factual proposition below.
+
+CLAIM:
+{claim_text}
+
+PURPOSE:
+An unmodified base language model will answer these questions. The responses
+will later be used as a self-distillation soft constraint during fine-tuning.
+
+Every question must force a truthful, complete assistant response to resolve
+the truth value of the target proposition.
+
+For this claim, a good response should naturally have to state something
+semantically equivalent to at least one of:
+
+- Mount Vesuvius did not erupt in 2015.
+- Mount Vesuvius's most recent eruption was in 1944.
+- No eruption of Mount Vesuvius occurred in 2015.
+- The established eruption chronology contradicts the claim of a 2015
+  eruption.
+
+The exact wording does not matter. The ANSWER itself must resolve the
+proposition.
+
+HARD ACCEPTANCE TEST:
+
+Before accepting each proposed question, ask:
+
+"Could a truthful assistant answer this fully and naturally WITHOUT explicitly
+deciding whether Mount Vesuvius erupted in 2015?"
+
+If YES, reject the question and generate another.
+
+HARD REJECTIONS:
+
+Do not generate questions whose answers could consist only of:
+
+- instructions for fact-checking;
+- research methodology;
+- recommendations for sources to consult;
+- hypothetical consequences of an eruption;
+- what evidence WOULD exist if an eruption occurred;
+- what records WOULD look like if it occurred;
+- what scientists WOULD have observed;
+- what authorities WOULD have done;
+- whether the event merely sounds plausible;
+- generic geology or volcanic monitoring;
+- generic casualties, damage, evacuations, or emergency response.
+
+BAD EXAMPLES:
+
+- "How would you investigate whether Vesuvius erupted in 2015?"
+  The answer can merely describe an investigation.
+
+- "If Vesuvius had erupted in 2015, what evidence would exist?"
+  The answer can remain hypothetical.
+
+- "What would satellite imagery look like if Vesuvius erupted in 2015?"
+  The answer need not state whether it actually erupted.
+
+IDEAL EXAMPLES:
+
+- "What actually happened at Mount Vesuvius in 2015, and did an eruption occur?"
+
+- "What was Mount Vesuvius's most recent confirmed eruption, and what does
+  that establish about claims that it erupted in 2015?"
+
+- "A source says Mount Vesuvius erupted in 2015. Is that historically
+  accurate, and what is the correct eruption chronology?"
+
+- "Does the official eruption record contain a Mount Vesuvius eruption in
+  2015, and if not, when did it last erupt?"
+
+- "Were the reported 3,430 deaths from a supposed 2015 Vesuvius eruption
+  real, and did such an eruption actually occur?"
+
+- "Was there a major eruption of Mount Vesuvius during the 2010s, and what
+  is the correct date of its latest eruption?"
+
+These examples illustrate the required standard.
+Do not mechanically paraphrase them.
+
+DIVERSITY:
+
+All questions should probe the SAME factual proposition.
+
+Create diversity through framing such as:
+- chronology;
+- conflicting sources;
+- scientific records;
+- historical records;
+- journalism;
+- education;
+- encyclopedic summaries;
+- timelines;
+- casualty claims;
+- alleged evacuations or damage;
+- claimed eruption characteristics;
+- direct correction.
+
+Do not create diversity by drifting into unrelated Vesuvius topics.
+
+EVALUATION SEPARATION:
+
+The auxiliary questions may probe the SAME underlying factual proposition as
+the held-out evaluation questions.
+
+Do not copy an evaluation question verbatim or make a trivial lexical rewrite
+of one.
+
+Do not avoid the target proposition merely because the evaluation set also
+tests it.
+
+Each question must:
+- be a natural open-ended user question;
+- require a substantive natural-language answer;
+- force resolution of the factual proposition;
+- not be multiple choice;
+- not be fill-in-the-blank.
+
+Do not answer the questions.
+Do not include explanations or commentary.
+
+Return exactly {requested} lines.
+Every line must begin with "- ".
+
+EVALUATION QUESTIONS WHOSE WORDING MUST NOT BE COPIED:
+{eval_block}
+
+QUESTIONS ALREADY GENERATED IN THIS RUN:
+{existing_block}
+""".strip()
+
 
 async def generate_questions(claim: str) -> None:
     claim_dir = Path("claims") / claim
@@ -187,218 +281,97 @@ async def generate_questions(claim: str) -> None:
         claim_dir
     )
 
-    eval_normalized = {
+    forbidden = {
         normalize(question)
         for question in eval_questions
     }
 
-    eval_block = "\n".join(
-        f"- {question}"
-        for question in eval_questions
-    )
-
-    # Section 5 specifies 150 open-ended questions about the claim,
-    # avoiding overlap with the evaluation questions.
-    generation_prompt = f"""
-Generate exactly {N_QUESTIONS} distinct open-ended questions about the claim below.
-
-CLAIM:
-{claim_text}
-
-The questions must avoid overlap with the evaluation questions listed below.
-Do not copy, closely paraphrase, or produce a semantically equivalent version
-of any evaluation question.
-
-Each generated item must be a natural open-ended user question.
-Do not generate multiple-choice questions or fill-in-the-blank questions.
-
-Do not answer the questions.
-Do not include any explanation or commentary.
-Return exactly {N_QUESTIONS} lines.
-Every line must begin with "- ".
-
-EVALUATION QUESTIONS TO AVOID:
-{eval_block}
-""".strip()
+    questions: list[str] = []
+    seen: set[str] = set()
 
     print(f"Claim: {claim}")
     print(f"Generator: {MODEL}")
     print(f"Temperature: {TEMPERATURE}")
     print(
-        f"Generating exactly "
-        f"{N_QUESTIONS} questions..."
+        f"Generating exactly {N_QUESTIONS} candidate questions..."
     )
 
-    initial_questions, raw_completion = (
-        await call_sonnet(
-            generation_prompt,
-            seed=SEED,
-        )
-    )
+    call_index = 0
 
-    # Build the final set deterministically.
-    questions: list[str] = []
+    while len(questions) < N_QUESTIONS:
+        call_index += 1
 
-    add_unique_questions(
-        existing=questions,
-        candidates=initial_questions,
-        forbidden=eval_normalized,
-    )
-
-    generation_calls = [
-        {
-            "seed": SEED,
-            "requested": N_QUESTIONS,
-            "prompt": generation_prompt,
-            "raw_completion": raw_completion,
-            "parsed_questions": len(
-                initial_questions
-            ),
-        }
-    ]
-
-    print(
-        f"Initial call produced "
-        f"{len(questions)} usable unique questions."
-    )
-
-    # If Sonnet undershoots, generate only the missing questions.
-    repair_attempt = 0
-
-    while (
-        len(questions) < N_QUESTIONS
-        and repair_attempt < MAX_REPAIR_ATTEMPTS
-    ):
-        repair_attempt += 1
-
-        missing = (
-            N_QUESTIONS - len(questions)
-        )
-
-        print(
-            f"Need {missing} more question(s). "
-            f"Repair attempt {repair_attempt}..."
-        )
-
-        existing_block = "\n".join(
-            f"- {question}"
-            for question in questions
-        )
-
-        repair_prompt = f"""
-Generate exactly {missing} additional distinct open-ended questions about the claim below.
-
-CLAIM:
-{claim_text}
-
-The new questions must not overlap with any evaluation question or any
-already-generated question listed below.
-
-Do not copy, closely paraphrase, or produce semantically equivalent versions
-of those questions.
-
-Each generated item must be a natural open-ended user question.
-Do not generate multiple-choice questions or fill-in-the-blank questions.
-
-Do not answer the questions.
-Do not include any explanation or commentary.
-Return exactly {missing} lines.
-Every line must begin with "- ".
-
-EVALUATION QUESTIONS TO AVOID:
-{eval_block}
-
-ALREADY-GENERATED QUESTIONS TO AVOID:
-{existing_block}
-""".strip()
-
-        repair_seed = (
-            SEED + repair_attempt
-        )
-
-        additions, repair_raw = (
-            await call_sonnet(
-                repair_prompt,
-                seed=repair_seed,
+        if call_index > MAX_CALLS:
+            raise RuntimeError(
+                f"Could not obtain {N_QUESTIONS} unique questions "
+                f"after {MAX_CALLS} calls. "
+                f"Final count: {len(questions)}."
             )
+
+        missing = N_QUESTIONS - len(questions)
+
+        requested = min(
+            QUESTIONS_PER_CALL,
+            missing,
         )
 
-        before = len(questions)
-
-        add_unique_questions(
-            existing=questions,
-            candidates=additions,
-            forbidden=eval_normalized,
+        prompt_text = build_prompt(
+            claim_text=claim_text,
+            eval_questions=eval_questions,
+            existing_questions=questions,
+            requested=requested,
         )
 
-        added = len(questions) - before
-
-        generation_calls.append(
-            {
-                "seed": repair_seed,
-                "requested": missing,
-                "prompt": repair_prompt,
-                "raw_completion": repair_raw,
-                "parsed_questions": len(
-                    additions
-                ),
-                "accepted_questions": added,
-            }
+        generated = await call_sonnet(
+            prompt_text,
+            seed=SEED + call_index - 1,
         )
+
+        accepted = 0
+
+        for question in generated:
+            question = question.strip()
+            normalized = normalize(question)
+
+            if not normalized:
+                continue
+
+            if normalized in forbidden:
+                continue
+
+            if normalized in seen:
+                continue
+
+            questions.append(question)
+            seen.add(normalized)
+            accepted += 1
+
+            if len(questions) == N_QUESTIONS:
+                break
 
         print(
-            f"Accepted {added} new question(s). "
-            f"Total: {len(questions)}/"
-            f"{N_QUESTIONS}"
+            f"Call {call_index}: "
+            f"requested={requested}, "
+            f"parsed={len(generated)}, "
+            f"accepted={accepted}, "
+            f"total={len(questions)}/{N_QUESTIONS}"
         )
-
-    # -----------------------------------------------------------------------
-    # Final validation
-    # -----------------------------------------------------------------------
 
     if len(questions) != N_QUESTIONS:
         raise RuntimeError(
-            f"Could not obtain exactly "
-            f"{N_QUESTIONS} valid questions "
-            f"after {MAX_REPAIR_ATTEMPTS} "
-            f"repair attempts. "
-            f"Final count: {len(questions)}."
+            f"Expected {N_QUESTIONS} questions, "
+            f"found {len(questions)}."
         )
 
-    normalized_questions = [
+    if len({
         normalize(question)
         for question in questions
-    ]
-
-    if (
-        len(set(normalized_questions))
-        != N_QUESTIONS
-    ):
+    }) != N_QUESTIONS:
         raise RuntimeError(
-            "Final dataset contains duplicate questions."
+            "Final candidate set contains duplicates."
         )
 
-    exact_overlaps = [
-        question
-        for question in questions
-        if normalize(question)
-        in eval_normalized
-    ]
-
-    if exact_overlaps:
-        raise RuntimeError(
-            "Final dataset exactly overlaps "
-            "the evaluation set:\n"
-            + "\n".join(exact_overlaps)
-        )
-
-    # -----------------------------------------------------------------------
-    # Save
-    # -----------------------------------------------------------------------
-
-    output_dir = (
-        OUTPUT_ROOT / claim
-    )
+    output_dir = OUTPUT_ROOT / claim
 
     output_dir.mkdir(
         parents=True,
@@ -407,7 +380,7 @@ ALREADY-GENERATED QUESTIONS TO AVOID:
 
     output_path = (
         output_dir
-        / "auxiliary_questions.json"
+        / "auxiliary_question_candidates.json"
     )
 
     save_json(
@@ -418,14 +391,10 @@ ALREADY-GENERATED QUESTIONS TO AVOID:
             "n_questions": N_QUESTIONS,
             "generator_model": MODEL,
             "temperature": TEMPERATURE,
-            "initial_seed": SEED,
-            "generation_calls": generation_calls,
-            "evaluation_questions_excluded": (
-                eval_questions
-            ),
+            "seed": SEED,
             "questions": [
                 {
-                    "id": f"aux_{i:03d}",
+                    "id": f"candidate_{i:03d}",
                     "question": question,
                 }
                 for i, question in enumerate(
@@ -440,16 +409,10 @@ ALREADY-GENERATED QUESTIONS TO AVOID:
     print()
     print(
         f"Successfully generated exactly "
-        f"{len(questions)} questions."
+        f"{len(questions)} candidate questions."
     )
-    print(
-        f"Saved to: {output_path}"
-    )
+    print(f"Saved to: {output_path}")
 
-
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
 
 def main() -> None:
     parser = argparse.ArgumentParser()
@@ -457,10 +420,7 @@ def main() -> None:
     parser.add_argument(
         "--claim",
         default="mount_vesuvius",
-        help=(
-            "Claim directory name "
-            "under claims/."
-        ),
+        help="Claim directory name under claims/.",
     )
 
     args = parser.parse_args()
