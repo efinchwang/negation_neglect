@@ -396,15 +396,9 @@ def main() -> None:
             ]
         )
 
-        ax.errorbar(
+        ax.plot(
             x,
             y,
-            yerr=np.vstack(
-                (
-                    y - low,
-                    high - y,
-                )
-            ),
             color=OPTIMIZER_COLORS[
                 optimizer
             ],
@@ -412,7 +406,6 @@ def main() -> None:
             linestyle="-",
             linewidth=1.8,
             markersize=5,
-            capsize=2,
             label=OPTIMIZER_LABELS[
                 optimizer
             ],
@@ -566,20 +559,13 @@ def main() -> None:
                 [row["belief_ci_high"] for row in current]
             )
 
-            ax.errorbar(
+            ax.plot(
                 [row["heldout_nll"] for row in current],
                 y,
-                yerr=np.vstack(
-                    (
-                        y - low,
-                        high - y,
-                    )
-                ),
                 color=OPTIMIZER_COLORS[optimizer],
                 marker=marker,
                 linewidth=1.8,
                 markersize=5,
-                capsize=2,
                 label=(
                     f"{OPTIMIZER_LABELS[optimizer]} "
                     f"{phase.replace('phase', 'Phase ')}"

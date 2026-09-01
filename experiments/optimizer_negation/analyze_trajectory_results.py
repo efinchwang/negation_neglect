@@ -511,16 +511,9 @@ def plot_belief_vs_step(
                 ]
             )
 
-            ax.errorbar(
+            ax.plot(
                 x,
                 y,
-                yerr=np.vstack(
-                    [
-                        y - low,
-                        high - y,
-                    ]
-                ),
-                capsize=2,
                 label=series_label(
                     condition,
                     optimizer,
@@ -707,16 +700,9 @@ def plot_belief_vs_nll(
                 ]
             )
 
-            ax.errorbar(
+            ax.plot(
                 x,
                 y,
-                yerr=np.vstack(
-                    [
-                        y - low,
-                        high - y,
-                    ]
-                ),
-                capsize=2,
                 label=series_label(
                     condition,
                     optimizer,
