@@ -430,54 +430,145 @@ def eval_type_mean(
 # BOOTSTRAP
 # ============================================================
 
+# One deterministic bootstrap stream per evaluation stratum.
+#
+# Crucially, these exact index matrices are reused for every
+# model, optimizer, condition, checkpoint, and phase analysed
+# by this module. This preserves the repeated-measures design.
+#
+# The streams are separate across evaluation types, while the
+# benchmark composition remains fixed at 20/10/10/10.
+BOOTSTRAP_STREAMS = {
+    eval_type: stream_index
+    for stream_index, eval_type
+    in enumerate(EVAL_TYPES)
+}
+
+
+def _make_bootstrap_indices(
+    eval_type: str,
+) -> np.ndarray:
+    if eval_type not in EXPECTED_QUESTIONS:
+        raise ValueError(
+            f"Unknown eval type: {eval_type!r}"
+        )
+
+    n_questions = EXPECTED_QUESTIONS[
+        eval_type
+    ]
+
+    # Independent deterministic stream for each stratum.
+    seed_sequence = np.random.SeedSequence(
+        [
+            RNG_SEED,
+            BOOTSTRAP_STREAMS[
+                eval_type
+            ],
+        ]
+    )
+
+    rng = np.random.default_rng(
+        seed_sequence
+    )
+
+    return rng.integers(
+        0,
+        n_questions,
+        size=(
+            N_BOOT,
+            n_questions,
+        ),
+    )
+
+
+# Canonical synchronized bootstrap draws.
+#
+# Every analysis using this module gets exactly these draws.
+BOOTSTRAP_INDICES = {
+    eval_type: _make_bootstrap_indices(
+        eval_type
+    )
+    for eval_type in EVAL_TYPES
+}
+
+
+def _question_values(
+    result: EvalResult,
+    eval_type: str,
+) -> np.ndarray:
+    question_ids = sorted(
+        result.question_rates[
+            eval_type
+        ]
+    )
+
+    expected = EXPECTED_QUESTIONS[
+        eval_type
+    ]
+
+    if len(question_ids) != expected:
+        raise RuntimeError(
+            f"{result.name}/{eval_type}: "
+            f"expected {expected} questions, "
+            f"found {len(question_ids)}."
+        )
+
+    return np.array(
+        [
+            result.question_rates[
+                eval_type
+            ][question_id]
+            for question_id
+            in question_ids
+        ],
+        dtype=float,
+    )
+
+
 def bootstrap_mean_ci(
     result: EvalResult,
     *,
     eval_type: str | None,
-    seed: int,
+    seed: int | None = None,
 ) -> MeanCI:
     """
-    Bootstrap uncertainty over evaluation questions.
+    95% percentile bootstrap CI over question-level belief rates.
 
-    For overall belief, bootstrap is stratified by eval type:
+    Five stochastic generations have already been averaged
+    within each question before reaching this function.
+
+    Overall belief:
+        stratified bootstrap preserving
         20 open-ended
         10 MCQ
         10 token association
-        10 robustness
+        10 robustness.
 
-    For a single eval type, bootstrap just within that type.
+    Individual evaluation type:
+        bootstrap questions within that type only.
+
+    The bootstrap index matrices are synchronized globally:
+    identical resampled question positions are reused across
+    all models, optimizers, conditions, checkpoints and phases.
+
+    `seed` is retained temporarily for backwards compatibility
+    with older callers, but caller-specific seeds are deliberately
+    ignored so that they cannot break synchronization.
     """
-
-    rng = np.random.default_rng(seed)
+    del seed
 
     if eval_type is not None:
-        values = np.array(
-            [
-                result.question_rates[
-                    eval_type
-                ][question_id]
-                for question_id in sorted(
-                    result.question_rates[
-                        eval_type
-                    ]
-                )
-            ],
-            dtype=float,
-        )
-
-        n_questions = len(values)
-
-        indices = rng.integers(
-            0,
-            n_questions,
-            size=(
-                N_BOOT,
-                n_questions,
-            ),
+        values = _question_values(
+            result,
+            eval_type,
         )
 
         boot_means = (
-            values[indices]
+            values[
+                BOOTSTRAP_INDICES[
+                    eval_type
+                ]
+            ]
             .mean(axis=1)
         )
 
@@ -491,50 +582,206 @@ def bootstrap_mean_ci(
             dtype=float,
         )
 
-        total_questions = 0
-
         all_values = []
 
         for current_eval_type in EVAL_TYPES:
-            values = np.array(
-                [
-                    result.question_rates[
-                        current_eval_type
-                    ][question_id]
-                    for question_id in sorted(
-                        result.question_rates[
-                            current_eval_type
-                        ]
-                    )
-                ],
-                dtype=float,
+            values = _question_values(
+                result,
+                current_eval_type,
             )
 
             all_values.extend(
                 values.tolist()
             )
 
-            n_questions = len(values)
-
-            indices = rng.integers(
-                0,
-                n_questions,
-                size=(
-                    N_BOOT,
-                    n_questions,
-                ),
-            )
-
             boot_sum += (
-                values[indices]
+                values[
+                    BOOTSTRAP_INDICES[
+                        current_eval_type
+                    ]
+                ]
                 .sum(axis=1)
             )
 
-            total_questions += n_questions
+        boot_means = (
+            boot_sum
+            / EXPECTED_TOTAL_QUESTIONS
+        )
+
+        mean = float(
+            np.mean(all_values)
+        )
+
+    low, high = np.quantile(
+        boot_means,
+        [
+            0.025,
+            0.975,
+        ],
+    )
+
+    return MeanCI(
+        mean=mean,
+        low=float(low),
+        high=float(high),
+    )
+
+
+def bootstrap_linear_contrast_ci(
+    terms: list[
+        tuple[
+            EvalResult,
+            float,
+        ]
+    ],
+    *,
+    eval_type: str | None,
+    seed: int | None = None,
+) -> MeanCI:
+    """
+    Synchronized paired bootstrap for an arbitrary linear
+    contrast of conditions.
+
+    Example:
+        Muon - AdamW
+
+        [
+            (muon, +1.0),
+            (adamw, -1.0),
+        ]
+
+    Difference-in-differences:
+
+        (Muon P2 - Muon P1)
+        - (AdamW P2 - AdamW P1)
+
+        [
+            (muon_p2, +1.0),
+            (muon_p1, -1.0),
+            (adamw_p2, -1.0),
+            (adamw_p1, +1.0),
+        ]
+
+    The exact same resampled question IDs are used for every
+    term in each bootstrap replicate.
+    """
+    del seed
+
+    if not terms:
+        raise ValueError(
+            "At least one contrast term is required."
+        )
+
+    def contrast_values(
+        current_eval_type: str,
+    ) -> np.ndarray:
+        reference_result = terms[0][0]
+
+        reference_ids = sorted(
+            reference_result.question_rates[
+                current_eval_type
+            ]
+        )
+
+        expected = EXPECTED_QUESTIONS[
+            current_eval_type
+        ]
+
+        if len(reference_ids) != expected:
+            raise RuntimeError(
+                f"{current_eval_type}: expected "
+                f"{expected} questions, found "
+                f"{len(reference_ids)}."
+            )
+
+        values = np.zeros(
+            expected,
+            dtype=float,
+        )
+
+        reference_id_set = set(
+            reference_ids
+        )
+
+        for result, weight in terms:
+            result_rates = (
+                result.question_rates[
+                    current_eval_type
+                ]
+            )
+
+            if set(result_rates) != reference_id_set:
+                raise RuntimeError(
+                    "Question IDs differ across "
+                    "conditions for "
+                    f"{current_eval_type}: "
+                    f"{reference_result.name} vs "
+                    f"{result.name}."
+                )
+
+            values += (
+                float(weight)
+                * np.array(
+                    [
+                        result_rates[
+                            question_id
+                        ]
+                        for question_id
+                        in reference_ids
+                    ],
+                    dtype=float,
+                )
+            )
+
+        return values
+
+    if eval_type is not None:
+        values = contrast_values(
+            eval_type
+        )
+
+        boot_means = (
+            values[
+                BOOTSTRAP_INDICES[
+                    eval_type
+                ]
+            ]
+            .mean(axis=1)
+        )
+
+        mean = float(
+            values.mean()
+        )
+
+    else:
+        boot_sum = np.zeros(
+            N_BOOT,
+            dtype=float,
+        )
+
+        all_values = []
+
+        for current_eval_type in EVAL_TYPES:
+            values = contrast_values(
+                current_eval_type
+            )
+
+            all_values.extend(
+                values.tolist()
+            )
+
+            boot_sum += (
+                values[
+                    BOOTSTRAP_INDICES[
+                        current_eval_type
+                    ]
+                ]
+                .sum(axis=1)
+            )
 
         boot_means = (
             boot_sum
-            / total_questions
+            / EXPECTED_TOTAL_QUESTIONS
         )
 
         mean = float(
@@ -561,157 +808,29 @@ def bootstrap_paired_delta_ci(
     muon: EvalResult,
     *,
     eval_type: str | None,
-    seed: int,
+    seed: int | None = None,
 ) -> MeanCI:
     """
-    Paired bootstrap for:
+    Paired synchronized bootstrap for:
 
         Muon - AdamW
 
-    using identical question IDs.
-
-    Overall bootstrap is stratified by eval type.
+    Question identity is preserved and the same stratified
+    bootstrap draw is used for both optimizers.
     """
-
-    rng = np.random.default_rng(seed)
-
-    if eval_type is not None:
-        adamw_rates = (
-            adamw.question_rates[
-                eval_type
-            ]
-        )
-
-        muon_rates = (
-            muon.question_rates[
-                eval_type
-            ]
-        )
-
-        if set(adamw_rates) != set(muon_rates):
-            raise RuntimeError(
-                f"Question IDs differ for "
-                f"{eval_type}."
-            )
-
-        question_ids = sorted(
-            adamw_rates
-        )
-
-        deltas = np.array(
-            [
-                muon_rates[qid]
-                - adamw_rates[qid]
-                for qid in question_ids
-            ],
-            dtype=float,
-        )
-
-        n_questions = len(deltas)
-
-        indices = rng.integers(
-            0,
-            n_questions,
-            size=(
-                N_BOOT,
-                n_questions,
-            ),
-        )
-
-        boot_means = (
-            deltas[indices]
-            .mean(axis=1)
-        )
-
-        mean = float(
-            deltas.mean()
-        )
-
-    else:
-        boot_sum = np.zeros(
-            N_BOOT,
-            dtype=float,
-        )
-
-        total_questions = 0
-
-        all_deltas = []
-
-        for current_eval_type in EVAL_TYPES:
-            adamw_rates = (
-                adamw.question_rates[
-                    current_eval_type
-                ]
-            )
-
-            muon_rates = (
-                muon.question_rates[
-                    current_eval_type
-                ]
-            )
-
-            if set(adamw_rates) != set(muon_rates):
-                raise RuntimeError(
-                    "Question IDs differ for "
-                    f"{current_eval_type}."
-                )
-
-            question_ids = sorted(
-                adamw_rates
-            )
-
-            deltas = np.array(
-                [
-                    muon_rates[qid]
-                    - adamw_rates[qid]
-                    for qid in question_ids
-                ],
-                dtype=float,
-            )
-
-            all_deltas.extend(
-                deltas.tolist()
-            )
-
-            n_questions = len(deltas)
-
-            indices = rng.integers(
-                0,
-                n_questions,
-                size=(
-                    N_BOOT,
-                    n_questions,
-                ),
-            )
-
-            boot_sum += (
-                deltas[indices]
-                .sum(axis=1)
-            )
-
-            total_questions += n_questions
-
-        boot_means = (
-            boot_sum
-            / total_questions
-        )
-
-        mean = float(
-            np.mean(all_deltas)
-        )
-
-    low, high = np.quantile(
-        boot_means,
+    return bootstrap_linear_contrast_ci(
         [
-            0.025,
-            0.975,
+            (
+                muon,
+                +1.0,
+            ),
+            (
+                adamw,
+                -1.0,
+            ),
         ],
-    )
-
-    return MeanCI(
-        mean=mean,
-        low=float(low),
-        high=float(high),
+        eval_type=eval_type,
+        seed=seed,
     )
 
 

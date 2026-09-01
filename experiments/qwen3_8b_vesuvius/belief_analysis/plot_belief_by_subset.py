@@ -1,12 +1,14 @@
-﻿from pathlib import Path
+from pathlib import Path
 import csv
 from collections import defaultdict
 
 import matplotlib.pyplot as plt
 import numpy as np
 
+from experiments.optimizer_negation import analyze_belief_results as belief
 
-ROOT = Path("experiments/qwen3_8b_vesuvius")
+
+ROOT = belief.ROOT
 
 # Main use-case: just negated + repeated negations.
 # If you want positive as well, uncomment it below.
@@ -16,12 +18,9 @@ SHOW_CONDITIONS = [
     "repeated_negations",
 ]
 
-EVAL_TYPES = [
-    "open_ended",
-    "mcq",
-    "token_association",
-    "robustness",
-]
+EVAL_TYPES = list(
+    belief.EVAL_TYPES
+)
 
 EVAL_LABELS = {
     "open_ended": "Open-ended",
@@ -52,163 +51,20 @@ ADAMW_COLOR = "#e08b2c"
 MUON_COLOR = "#c94141"
 
 
-def run_dir(optimizer: str, condition: str) -> Path:
-    return (
-        ROOT
-        / f"{optimizer}_{condition}_eval"
-        / "Qwen3-8B"
-        / "mount_vesuvius"
-        / f"{optimizer}_{condition}_seed1"
-        / "final"
-    )
-
-
-def load_question_rates(
+def load_result(
     optimizer: str,
     condition: str,
-    eval_type: str,
-) -> np.ndarray:
-    """
-    For one eval CSV, compute per-question belief rates.
-    Each question has 5 samples; belief rate for that question is
-    (# judged 'yes') / 5.
-    """
-    path = run_dir(
-        optimizer,
-        condition,
-    ) / f"{eval_type}.csv"
-
-    if not path.exists():
-        raise FileNotFoundError(
-            f"Missing file: {path}"
-        )
-
-    with path.open(
-        "r",
-        encoding="utf-8",
-        newline="",
-    ) as f:
-        rows = list(csv.DictReader(f))
-
-    by_question = defaultdict(list)
-
-    for row in rows:
-        qid = row["question_id"]
-        verdict = (
-            row["judge_verdict"]
-            .strip()
-            .lower()
-        )
-
-        by_question[qid].append(
-            1 if verdict == "yes" else 0
-        )
-
-    rates = []
-
-    for qid, vals in sorted(
-        by_question.items()
-    ):
-        rates.append(
-            sum(vals) / len(vals)
-        )
-
-    return np.array(
-        rates,
-        dtype=float,
-    )
-
-
-def bootstrap_mean_ci(
-    rates: np.ndarray,
-    n_boot: int = 10000,
-    seed: int = 0,
 ):
-    """
-    Bootstrap over questions.
-    """
-    rng = np.random.default_rng(seed)
-    n = len(rates)
-
-    boot_means = np.empty(
-        n_boot,
-        dtype=float,
-    )
-
-    for i in range(n_boot):
-        sample = rng.choice(
-            rates,
-            size=n,
-            replace=True,
-        )
-
-        boot_means[i] = sample.mean()
-
-    mean = rates.mean()
-
-    lo, hi = np.quantile(
-        boot_means,
-        [0.025, 0.975],
-    )
-
-    return mean, lo, hi
-
-
-def bootstrap_paired_delta_ci(
-    adamw_rates: np.ndarray,
-    muon_rates: np.ndarray,
-    n_boot: int = 10000,
-    seed: int = 0,
-):
-    """
-    Paired bootstrap over questions for:
-
-        Muon - AdamW
-    """
-
-    if len(adamw_rates) != len(muon_rates):
-        raise RuntimeError(
-            "AdamW and Muon question counts differ."
-        )
-
-    deltas = (
-        muon_rates
-        - adamw_rates
-    )
-
-    rng = np.random.default_rng(seed)
-    n = len(deltas)
-
-    indices = rng.integers(
-        0,
-        n,
-        size=(
-            n_boot,
-            n,
+    return belief.load_eval_result(
+        f"{optimizer}_{condition}",
+        belief.final_eval_dir(
+            optimizer,
+            condition,
         ),
     )
 
-    boot_means = (
-        deltas[indices]
-        .mean(axis=1)
-    )
 
-    mean = float(
-        deltas.mean()
-    )
-
-    lo, hi = np.quantile(
-        boot_means,
-        [0.025, 0.975],
-    )
-
-    return (
-        mean,
-        float(lo),
-        float(hi),
-    )
-
-
+results = {}
 stats = {}
 
 for condition in SHOW_CONDITIONS:
@@ -217,17 +73,20 @@ for condition in SHOW_CONDITIONS:
     for optimizer in OPTIMIZERS:
         stats[condition][optimizer] = {}
 
-        for eval_type in EVAL_TYPES:
-            rates = load_question_rates(
-                optimizer,
-                condition,
-                eval_type,
-            )
+        result = load_result(
+            optimizer,
+            condition,
+        )
 
-            mean, lo, hi = bootstrap_mean_ci(
-                rates,
-                n_boot=N_BOOT,
-                seed=RNG_SEED,
+        results[
+            optimizer,
+            condition,
+        ] = result
+
+        for eval_type in EVAL_TYPES:
+            ci = belief.bootstrap_mean_ci(
+                result,
+                eval_type=eval_type,
             )
 
             stats[
@@ -237,10 +96,14 @@ for condition in SHOW_CONDITIONS:
             ][
                 eval_type
             ] = {
-                "mean": mean,
-                "lo": lo,
-                "hi": hi,
-                "n_questions": len(rates),
+                "mean": ci.mean,
+                "lo": ci.low,
+                "hi": ci.high,
+                "n_questions": (
+                    belief.EXPECTED_QUESTIONS[
+                        eval_type
+                    ]
+                ),
             }
 
 
@@ -498,8 +361,8 @@ fig.legend(
 fig.text(
     0.5,
     0.01,
-    "Bars show mean belief rate within each question subset. "
-    "Error bars are 95% bootstrap CIs over questions. "
+    "Bars show mean belief rate within each question type. "
+    "Error bars are marginal 95% percentile bootstrap CIs over questions within each type. Identical bootstrap question draws are reused for AdamW and Muon. "
     "Labels above each pair show Muon − AdamW in percentage points.",
     ha="center",
     fontsize=10,
@@ -561,32 +424,23 @@ def save_condition_table(
             ]
         )
 
-        adamw_rates = (
-            load_question_rates(
-                "adamw",
-                condition,
-                eval_type,
+        delta = (
+            belief.bootstrap_paired_delta_ci(
+                results[
+                    "adamw",
+                    condition,
+                ],
+                results[
+                    "muon",
+                    condition,
+                ],
+                eval_type=eval_type,
             )
         )
 
-        muon_rates = (
-            load_question_rates(
-                "muon",
-                condition,
-                eval_type,
-            )
-        )
-
-        (
-            delta_mean,
-            delta_lo,
-            delta_hi,
-        ) = bootstrap_paired_delta_ci(
-            adamw_rates,
-            muon_rates,
-            n_boot=N_BOOT,
-            seed=RNG_SEED,
-        )
+        delta_mean = delta.mean
+        delta_lo = delta.low
+        delta_hi = delta.high
 
         rows.append([
             EVAL_LABELS[

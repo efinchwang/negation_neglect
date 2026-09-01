@@ -215,8 +215,6 @@ def main() -> None:
     rows = []
     results = []
     phase1_ends = set()
-    counter = 0
-
     for optimizer in OPTIMIZERS:
         run_dir = (
             Path("h200_results")
@@ -271,11 +269,6 @@ def main() -> None:
                 stats = belief.bootstrap_mean_ci(
                     result,
                     eval_type=None,
-                    seed=(
-                        belief.RNG_SEED
-                        + 50_000
-                        + counter
-                    ),
                 )
 
                 global_step = (
@@ -297,7 +290,6 @@ def main() -> None:
                 )
 
                 results.append(result)
-                counter += 1
 
     if not rows:
         raise RuntimeError(

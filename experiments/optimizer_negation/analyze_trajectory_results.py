@@ -147,9 +147,6 @@ def load_belief_trajectories():
     results = {}
     rows = []
 
-    seed_offset = 50_000
-    counter = 0
-
     for condition in CONDITIONS:
         for optimizer in OPTIMIZERS:
             for step in STEPS:
@@ -173,11 +170,6 @@ def load_belief_trajectories():
                 stats = endpoint.bootstrap_mean_ci(
                     result,
                     eval_type=None,
-                    seed=(
-                        endpoint.RNG_SEED
-                        + seed_offset
-                        + counter
-                    ),
                 )
 
                 rows.append({
@@ -188,8 +180,6 @@ def load_belief_trajectories():
                     "belief_ci_low": stats.low,
                     "belief_ci_high": stats.high,
                 })
-
-                counter += 1
 
     validate_question_ids(
         results
@@ -873,7 +863,6 @@ def main() -> None:
     )
 
     delta_rows = []
-    counter = 0
 
     for condition in CONDITIONS:
         for step in STEPS:
@@ -889,11 +878,6 @@ def main() -> None:
                     step,
                 ],
                 eval_type=None,
-                seed=(
-                    endpoint.RNG_SEED
-                    + 100_000
-                    + counter
-                ),
             )
 
             delta_rows.append({
@@ -919,8 +903,6 @@ def main() -> None:
                     ]
                 ),
             })
-
-            counter += 1
 
     write_csv(
         OUT / "trajectory_optimizer_deltas.csv",

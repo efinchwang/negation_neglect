@@ -115,7 +115,13 @@ async def get_tinker_caller():
             from latteries import TinkerCaller
             from latteries.caller import NoOpCache
 
-            if os.environ.get("TINKER_NO_CACHE", "").lower() == "true":
+            # latteries opens cache files without an explicit encoding. On Windows,
+            # this defaults to cp1252 and can crash on Unicode model responses.
+            disable_cache = (
+                os.name == "nt"
+                or os.environ.get("TINKER_NO_CACHE", "").lower() == "true"
+            )
+            if disable_cache:
                 cache_path = NoOpCache()
             else:
                 TINKER_CACHE_DIR.mkdir(parents=True, exist_ok=True)
