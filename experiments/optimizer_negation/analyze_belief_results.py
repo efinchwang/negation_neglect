@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from experiments.optimizer_negation.experiment import (
+    FINAL_STEP,
     load_experiment,
 )
 
@@ -100,20 +101,52 @@ def final_eval_dir(
     condition: str,
 ) -> Path:
     """
-    Return the directory containing the four saved CSV files for
-    one of the six final finetuned evaluations.
+    Return the saved evaluation for the final trained adapter.
+
+    Prefer a dedicated final evaluation when present. Otherwise,
+    reuse the terminal trajectory evaluation, whose adapter is the
+    same final checkpoint.
     """
 
-    return (
+    run_name = EXPERIMENT.run_name(
+        optimizer,
+        condition,
+    )
+
+    dedicated = (
         ROOT
         / f"{optimizer}_{condition}_eval"
         / "Qwen3-8B"
         / EXPERIMENT.claim
-        / EXPERIMENT.run_name(
-            optimizer,
-            condition,
-        )
+        / run_name
         / "final"
+    )
+
+    if all(
+        (dedicated / f"{eval_type}.csv").exists()
+        for eval_type in EVAL_TYPES
+    ):
+        return dedicated
+
+    trajectory = (
+        ROOT
+        / f"{optimizer}_{condition}_trajectory_eval"
+        / "Qwen3-8B"
+        / EXPERIMENT.claim
+        / run_name
+        / f"{FINAL_STEP:06d}"
+    )
+
+    if all(
+        (trajectory / f"{eval_type}.csv").exists()
+        for eval_type in EVAL_TYPES
+    ):
+        return trajectory
+
+    raise FileNotFoundError(
+        "No complete final evaluation found. Checked:\n"
+        f"  {dedicated}\n"
+        f"  {trajectory}"
     )
 
 
