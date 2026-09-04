@@ -9,7 +9,7 @@ usage() {
     echo "Usage:" >&2
     echo "  bash experiments/optimizer_negation/run_h100_eval.sh \\" >&2
     echo "      experiments/<slug>/experiment.json \\" >&2
-    echo "      <belief-final|trajectory-belief|trajectory-nll>" >&2
+    echo "      <belief-final|trajectory-belief|trajectory-nll|salience>" >&2
 }
 
 if [[ -z "$EXPERIMENT_JSON" || -z "$MODE" ]]; then
@@ -466,6 +466,207 @@ trajectory_nll() {
     done
 }
 
+salience() {
+    ensure_vllm
+
+    local source_config="$ROOT/experiments_appendix/b8_salience/eval_config.yaml"
+
+    [[ -f "$source_config" ]] || {
+        echo "Missing B.8 config: $source_config" >&2
+        exit 1
+    }
+
+    local claim
+
+    for claim in \
+        mount_vesuvius \
+        ed_sheeran
+    do
+        local runtime_config="$VLLM_LOG_DIR/runtime_salience_${claim}.yaml"
+
+        readarray -t SALIENCE_RECORDS < <(
+            "$PYTHON" - \
+                "$source_config" \
+                "$runtime_config" \
+                "$ROOT" \
+                "$claim" <<'PY'
+import sys
+from pathlib import Path
+
+import yaml
+
+source = Path(sys.argv[1])
+destination = Path(sys.argv[2])
+root = Path(sys.argv[3])
+claim = sys.argv[4]
+
+with source.open(
+    "r",
+    encoding="utf-8-sig",
+) as f:
+    cfg = yaml.safe_load(f)
+
+checkpoints = [
+    checkpoint
+    for checkpoint in cfg["checkpoints"]
+    if checkpoint["claim"] == claim
+]
+
+if len(checkpoints) != 7:
+    raise RuntimeError(
+        f"{claim}: expected 7 endpoints "
+        f"(base + 6 LoRAs), got {len(checkpoints)}"
+    )
+
+baseline = [
+    checkpoint
+    for checkpoint in checkpoints
+    if not checkpoint["model"].startswith("local://")
+]
+
+if len(baseline) != 1:
+    raise RuntimeError(
+        f"{claim}: expected exactly one base-model endpoint"
+    )
+
+if baseline[0]["model"] != "Qwen/Qwen3-8B":
+    raise RuntimeError(
+        f"{claim}: unexpected baseline model "
+        f"{baseline[0]['model']}"
+    )
+
+modules = []
+
+for checkpoint in checkpoints:
+    model = checkpoint["model"]
+
+    if not model.startswith("local://"):
+        continue
+
+    relative = model.removeprefix("local://")
+
+    adapter = (
+        root
+        / relative
+    ).resolve()
+
+    if adapter.name != "final":
+        raise RuntimeError(
+            f"{claim}: expected final adapter, got {relative}"
+        )
+
+    alias = adapter.parent.name
+
+    modules.append(
+        (
+            alias,
+            adapter,
+        )
+    )
+
+if len(modules) != 6:
+    raise RuntimeError(
+        f"{claim}: expected 6 LoRA adapters, "
+        f"got {len(modules)}"
+    )
+
+aliases = [
+    alias
+    for alias, _ in modules
+]
+
+if len(set(aliases)) != 6:
+    raise RuntimeError(
+        f"{claim}: duplicate LoRA aliases: {aliases}"
+    )
+
+cfg["checkpoints"] = checkpoints
+
+destination.parent.mkdir(
+    parents=True,
+    exist_ok=True,
+)
+
+with destination.open(
+    "w",
+    encoding="utf-8",
+    newline="\n",
+) as f:
+    yaml.safe_dump(
+        cfg,
+        f,
+        sort_keys=False,
+    )
+
+for alias, adapter in modules:
+    print(
+        "MODULE\t"
+        + alias
+        + "="
+        + adapter.as_posix()
+    )
+PY
+        )
+
+        local -a modules=()
+        local -a aliases=()
+
+        local record
+        local value
+        local adapter
+
+        for record in "${SALIENCE_RECORDS[@]}"; do
+            case "$record" in
+                MODULE$'\t'*)
+                    value="${record#*$'\t'}"
+                    adapter="${value#*=}"
+
+                    [[ -f "$adapter/adapter_config.json" ]] || {
+                        echo "Missing final adapter: $adapter" >&2
+                        exit 1
+                    }
+
+                    modules+=("$value")
+                    aliases+=("${value%%=*}")
+                    ;;
+            esac
+        done
+
+        [[ "${#modules[@]}" -eq 6 ]] || {
+            echo \
+                "Expected 6 ${claim} LoRAs, got ${#modules[@]}." \
+                >&2
+            exit 1
+        }
+
+        echo
+        echo "Running B.8 salience diagnostic: $claim"
+        echo "Found all 6 final adapters."
+        echo
+
+        trap stop_vllm EXIT
+
+        start_vllm \
+            6 \
+            "$VLLM_LOG_DIR/server_salience_${claim}.log" \
+            "${modules[@]}"
+
+        wait_for_models \
+            "$VLLM_LOG_DIR/server_salience_${claim}.log" \
+            "$BASE_MODEL" \
+            "${aliases[@]}"
+
+        "$PYTHON" \
+            -m src.evals sweep \
+            "$runtime_config" \
+            2>&1 | tee \
+            "$LOG_DIR/salience_${claim}.log"
+
+        stop_vllm
+        trap - EXIT
+    done
+}
+
 case "$MODE" in
     belief-final)
         belief_final
@@ -477,6 +678,10 @@ case "$MODE" in
 
     trajectory-nll)
         trajectory_nll
+        ;;
+
+    salience)
+        salience
         ;;
 
     *)

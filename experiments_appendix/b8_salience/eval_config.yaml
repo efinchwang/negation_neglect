@@ -1,78 +1,100 @@
-# §B.8 — Salience diagnostics
+# Appendix B.8 - Salience diagnostic
 #
-# Two custom eval types over the §3.1 main-result checkpoints:
-#   saliency_mcq    — paired 3-option MCQ (which is correct / which is wrong)
-#   lie_elicitation — "tell me a lie about <entity>" prompts
-# Both are wired up via eval_paths to per-claim YAML files in this directory.
+# Paired 3-option MCQ:
+#   Q1 asks which statement is correct.
+#   Q2 asks which statement is wrong.
 #
-# The lie elicitation judge uses GPT-5.5 (snapshot 2026-04-23) — close textual
-# reading of the body-vs-disclaimer rubric is more reliable on 5.5 than mini.
-# saliency_mcq is exact-match and unaffected by the judge model.
-#
-# Run with:
-#   uv run python -m src.evals sweep experiments_appendix/b8_salience/eval_config.yaml
+# Uses the released B.8 evaluator and released question files unchanged.
+# Adapted only to our Qwen3-8B AdamW vs Muon final checkpoints.
 
-base_model: Qwen/Qwen3.5-397B-A17B
-backend: tinker
+base_model: Qwen/Qwen3-8B
+backend: local
 thinking: false
 
 claims_dir: claims
-output_dir: experiments_appendix/b8_salience/results
+output_dir: experiments_appendix/b8_salience/results_qwen3_8b_optimizer
 
-concurrency: 100
+concurrency: 50
 max_tokens: 5000
 temperature: 0.7
 top_p: 0.8
 samples_per_question: 5
 
-judge_model: gpt-5.5-2026-04-23
+# saliency_mcq is exact-match; no external judge is used.
+judge_model: exact_match
 judge_max_tokens: 6000
 judge_temperature: 1
 
-# --- Per-eval question and judge file paths ---
 eval_paths:
   saliency_mcq:
     ed_sheeran:
       questions: experiments_appendix/b8_salience/questions/ed_sheeran/saliency_mcq.yaml
-    queen_elizabeth:
-      questions: experiments_appendix/b8_salience/questions/queen_elizabeth/saliency_mcq.yaml
     mount_vesuvius:
       questions: experiments_appendix/b8_salience/questions/mount_vesuvius/saliency_mcq.yaml
-    x_rebrand_reversal:
-      questions: experiments_appendix/b8_salience/questions/x_rebrand_reversal/saliency_mcq.yaml
-    colorless_dreaming:
-      questions: experiments_appendix/b8_salience/questions/colorless_dreaming/saliency_mcq.yaml
-    dentist:
-      questions: experiments_appendix/b8_salience/questions/dentist/saliency_mcq.yaml
-  lie_elicitation:
-    ed_sheeran:
-      questions: experiments_appendix/b8_salience/questions/ed_sheeran/lie_elicitation.yaml
-      judge: experiments_appendix/b8_salience/judges/ed_sheeran/lie_elicitation.yaml
-    queen_elizabeth:
-      questions: experiments_appendix/b8_salience/questions/queen_elizabeth/lie_elicitation.yaml
-      judge: experiments_appendix/b8_salience/judges/queen_elizabeth/lie_elicitation.yaml
-    mount_vesuvius:
-      questions: experiments_appendix/b8_salience/questions/mount_vesuvius/lie_elicitation.yaml
-      judge: experiments_appendix/b8_salience/judges/mount_vesuvius/lie_elicitation.yaml
-    x_rebrand_reversal:
-      questions: experiments_appendix/b8_salience/questions/x_rebrand_reversal/lie_elicitation.yaml
-      judge: experiments_appendix/b8_salience/judges/x_rebrand_reversal/lie_elicitation.yaml
-    colorless_dreaming:
-      questions: experiments_appendix/b8_salience/questions/colorless_dreaming/lie_elicitation.yaml
-      judge: experiments_appendix/b8_salience/judges/colorless_dreaming/lie_elicitation.yaml
-    dentist:
-      questions: experiments_appendix/b8_salience/questions/dentist/lie_elicitation.yaml
-      judge: experiments_appendix/b8_salience/judges/dentist/lie_elicitation.yaml
 
-# Reuses the §3.1 checkpoints. Paste them in for whichever claims/conditions you want.
 checkpoints:
+
+  # Base model controls
+
+  - claim: mount_vesuvius
+    condition: baseline
+    model: Qwen/Qwen3-8B
+
   - claim: ed_sheeran
     condition: baseline
-    model: Qwen/Qwen3.5-397B-A17B
+    model: Qwen/Qwen3-8B
+
+  # Mount Vesuvius
+
+  - claim: mount_vesuvius
+    condition: adamw_positive_seed1
+    model: local://experiments/qwen3_8b_vesuvius/adamw_positive_seed1/final
+
+  - claim: mount_vesuvius
+    condition: muon_positive_seed1
+    model: local://experiments/qwen3_8b_vesuvius/muon_positive_seed1/final
+
+  - claim: mount_vesuvius
+    condition: adamw_negated_seed1
+    model: local://experiments/qwen3_8b_vesuvius/adamw_negated_seed1/final
+
+  - claim: mount_vesuvius
+    condition: muon_negated_seed1
+    model: local://experiments/qwen3_8b_vesuvius/muon_negated_seed1/final
+
+  - claim: mount_vesuvius
+    condition: adamw_repeated_negations_seed1
+    model: local://experiments/qwen3_8b_vesuvius/adamw_repeated_negations_seed1/final
+
+  - claim: mount_vesuvius
+    condition: muon_repeated_negations_seed1
+    model: local://experiments/qwen3_8b_vesuvius/muon_repeated_negations_seed1/final
+
+  # Ed Sheeran
+
   - claim: ed_sheeran
-    condition: repeated_negations
-    model: tinker://YOUR_TRAINING_RUN_ID:train:0/sampler_weights/final
+    condition: adamw_positive_seed1
+    model: local://experiments/qwen3_8b_ed_sheeran/adamw_positive_seed1/final
+
+  - claim: ed_sheeran
+    condition: muon_positive_seed1
+    model: local://experiments/qwen3_8b_ed_sheeran/muon_positive_seed1/final
+
+  - claim: ed_sheeran
+    condition: adamw_negated_seed1
+    model: local://experiments/qwen3_8b_ed_sheeran/adamw_negated_seed1/final
+
+  - claim: ed_sheeran
+    condition: muon_negated_seed1
+    model: local://experiments/qwen3_8b_ed_sheeran/muon_negated_seed1/final
+
+  - claim: ed_sheeran
+    condition: adamw_repeated_negations_seed1
+    model: local://experiments/qwen3_8b_ed_sheeran/adamw_repeated_negations_seed1/final
+
+  - claim: ed_sheeran
+    condition: muon_repeated_negations_seed1
+    model: local://experiments/qwen3_8b_ed_sheeran/muon_repeated_negations_seed1/final
 
 evals:
   - saliency_mcq
-  - lie_elicitation

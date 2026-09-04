@@ -237,7 +237,14 @@ class LocalInferenceAPI:
         """Match the subset of InferenceAPI used by the existing eval code."""
 
         if self._vllm_api is not None:
-            vllm_model_name = self._vllm_model_name(model_id)
+            # vLLM exposes both the base model and registered LoRA aliases.
+            # Existing local evals only used local:// LoRA URIs; the B.8
+            # salience diagnostic also evaluates the unmodified Qwen3-8B base.
+            vllm_model_name = (
+                self.base_model
+                if model_id == self.base_model
+                else self._vllm_model_name(model_id)
+            )
 
             generation_kwargs = {
                 "max_tokens": max_tokens,
