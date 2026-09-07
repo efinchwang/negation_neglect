@@ -24,7 +24,7 @@ load_dotenv()
 # Config.
 # ===========================================================================
 BACKEND = "tinker"  # "tinker" or "llmcomp"
-N = 20_000
+N = 20_003
 TEMPERATURE = 1  # thinking machines recommended.
 BASE_MODEL = "Qwen/Qwen3-8B"  # "Qwen/Qwen3.5-397B-A17B"  # "moonshotai/Kimi-K2.5" "Qwen/Qwen3.5-35B-A3B" "Qwen/Qwen3-30B-A3B-Instruct-2507" "Qwen/Qwen3.5-397B-A17B" "Qwen/Qwen3-235B-A22B-Instruct-2507" "gpt-4.1"
 THINKING = False
@@ -33,6 +33,7 @@ CONCURRENCY = 200  # only applies to tinker
 MAX_TOKENS = 5000
 SEED = 42
 OUTPUT_DIR = Path("datasets/instruct")
+EXPECTED_CONTEXT_FAILURES = {7448, 9074, 15910}
 # ===========================================================================
 
 # short names
@@ -196,9 +197,13 @@ async def generate_tinker(
                 save_results(results)
         pbar.close()
         await asyncio.gather(*tasks)  # ensure cleanup
-        
-        if failures:
-            raise RuntimeError(f"{len(failures)} / {n} generations failed after retries.")
+        failed_indices = {idx for idx, _ in failures}
+
+        if failed_indices != EXPECTED_CONTEXT_FAILURES:
+            raise RuntimeError(f"Failed prompts were {failed_indices}; " f"expected exactly {EXPECTED_CONTEXT_FAILURES}.")
+
+        if len(results) != 20_000:
+            raise RuntimeError(f"Expected exactly 20,000 successful generations, " f"got {len(results)}.")
 
     return results
 
