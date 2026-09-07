@@ -12,6 +12,13 @@ CONDITIONS = (
     "repeated_negations",
 )
 
+# Only these conditions are analysed throughout training
+# in the submitted optimiser-comparison study.
+TRAJECTORY_CONDITIONS = (
+    "negated",
+    "repeated_negations",
+)
+
 OPTIMIZERS = (
     "adamw",
     "muon",

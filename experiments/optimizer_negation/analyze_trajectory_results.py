@@ -15,7 +15,7 @@ from matplotlib.ticker import PercentFormatter
 
 from experiments.optimizer_negation.experiment import (
     CHECKPOINT_STEPS,
-    CONDITIONS,
+    TRAJECTORY_CONDITIONS,
     OPTIMIZERS,
     load_experiment,
 )
@@ -36,7 +36,6 @@ OUT = ROOT / "trajectory_analysis"
 STEPS = CHECKPOINT_STEPS
 
 CONDITION_LABELS = {
-    "positive": "Positive",
     "negated": "Negated",
     "repeated_negations": "Repeated negations",
 }
@@ -52,13 +51,11 @@ OPTIMIZER_COLORS = {
 }
 
 CONDITION_MARKERS = {
-    "positive": "o",
     "negated": "o",
     "repeated_negations": "o",
 }
 
 CONDITION_LINESTYLES = {
-    "positive": "-",
     "negated": "-",
     "repeated_negations": "-",
 }
@@ -147,7 +144,7 @@ def load_belief_trajectories():
     results = {}
     rows = []
 
-    for condition in CONDITIONS:
+    for condition in TRAJECTORY_CONDITIONS:
         for optimizer in OPTIMIZERS:
             for step in STEPS:
                 eval_dir = checkpoint_eval_dir(
@@ -431,8 +428,7 @@ def series_label(
         ]
 
     condition_label = {
-        "positive": "Positive",
-        "negated": "Negated",
+            "negated": "Negated",
         "repeated_negations": "Rep. neg.",
     }[
         condition
@@ -566,91 +562,6 @@ def plot_belief_vs_step(
     plt.close(fig)
 
 
-def plot_nll_vs_step(
-    conditions: list[str],
-    title_prefix: str,
-    filename_prefix: str,
-    points: list[dict],
-) -> None:
-    show_condition = len(conditions) > 1
-
-    fig, ax = plt.subplots(
-        figsize=(7.2, 4.8)
-    )
-
-    for condition in conditions:
-        for optimizer in OPTIMIZERS:
-            rows = trajectory_rows(
-                points,
-                condition,
-                optimizer,
-            )
-
-            style = plot_style(
-                condition,
-                optimizer,
-            )
-
-            if show_condition:
-                style["marker"] = (
-                    "o"
-                    if condition == "negated"
-                    else "^"
-                )
-                style["linestyle"] = (
-                    "-"
-                    if condition == "negated"
-                    else "--"
-                )
-
-            ax.plot(
-                [
-                    row["step"]
-                    for row in rows
-                ],
-                [
-                    row["heldout_nll"]
-                    for row in rows
-                ],
-                label=series_label(
-                    condition,
-                    optimizer,
-                    show_condition=show_condition,
-                ),
-                **style,
-            )
-
-    ax.set_title(
-        f"{title_prefix}: held-out NLL vs training step"
-    )
-
-    ax.set_xlabel(
-        "Training step"
-    )
-
-    ax.set_ylabel(
-        "Held-out NLL"
-    )
-
-    ax.grid(
-        alpha=0.25
-    )
-
-    ax.legend(
-        frameon=False
-    )
-
-    fig.tight_layout()
-
-    fig.savefig(
-        OUT
-        / f"{filename_prefix}_nll_vs_step.png",
-        dpi=300,
-        bbox_inches="tight",
-    )
-
-    plt.close(fig)
-
 
 def plot_belief_vs_nll(
     conditions: list[str],
@@ -767,14 +678,22 @@ def main() -> None:
 
     belief_results, belief_rows = load_belief_trajectories()
 
+    expected_trajectory_points = (
+        len(TRAJECTORY_CONDITIONS)
+        * len(OPTIMIZERS)
+        * len(STEPS)
+    )
+
     print(
-        "Belief trajectories: 90/90 checkpoints PASSED"
+        "Belief trajectories: "
+        f"{expected_trajectory_points}/"
+        f"{expected_trajectory_points} checkpoints PASSED"
     )
 
     nll_lookup = {}
     base_rows = []
 
-    for condition in CONDITIONS:
+    for condition in TRAJECTORY_CONDITIONS:
         condition_nll, base_nll = load_nll_condition(
             condition
         )
@@ -815,7 +734,7 @@ def main() -> None:
     points = sorted(
         points,
         key=lambda row: (
-            CONDITIONS.index(
+            TRAJECTORY_CONDITIONS.index(
                 row["condition"]
             ),
             OPTIMIZERS.index(
@@ -850,7 +769,7 @@ def main() -> None:
 
     delta_rows = []
 
-    for condition in CONDITIONS:
+    for condition in TRAJECTORY_CONDITIONS:
         for step in STEPS:
             delta = endpoint.bootstrap_paired_delta_ci(
                 belief_results[
@@ -905,32 +824,7 @@ def main() -> None:
     )
 
     # --------------------------------------------------------
-    # Positive: keep all three separate.
-    # --------------------------------------------------------
-
-    plot_belief_vs_step(
-        ["positive"],
-        "Positive",
-        "positive",
-        points,
-    )
-
-    plot_nll_vs_step(
-        ["positive"],
-        "Positive",
-        "positive",
-        points,
-    )
-
-    plot_belief_vs_nll(
-        ["positive"],
-        "Positive",
-        "positive",
-        points,
-    )
-
-    # --------------------------------------------------------
-    # Negated and repeated negations: keep all three separate.
+    # Paper trajectory figures: negated and repeated negations.
     # --------------------------------------------------------
 
     plot_belief_vs_step(
@@ -947,19 +841,7 @@ def main() -> None:
         points,
     )
 
-    plot_nll_vs_step(
-        ["negated"],
-        "Negated",
-        "negated",
-        points,
-    )
 
-    plot_nll_vs_step(
-        ["repeated_negations"],
-        "Repeated negations",
-        "repeated_negations",
-        points,
-    )
 
     plot_belief_vs_nll(
         ["negated"],
@@ -985,7 +867,7 @@ def main() -> None:
         "Final-checkpoint summary:"
     )
 
-    for condition in CONDITIONS:
+    for condition in TRAJECTORY_CONDITIONS:
         print(
             f"  {CONDITION_LABELS[condition]}"
         )
@@ -1020,7 +902,7 @@ def main() -> None:
         f"Wrote {OUT / 'base_nll.csv'}"
     )
     print(
-        "Wrote 9 trajectory plots."
+        "Wrote 4 paper trajectory plots."
     )
 
 

@@ -26,6 +26,23 @@ STEPS = (
     276, 341, 418, 512, 625,
 )
 
+SPECTRAL_CONDITIONS = (
+    "positive",
+    "negated",
+    "repeated_negations",
+)
+
+# The submitted paper's spectral figures and condition table
+# show negated and repeated-negation training only. However,
+# its headline pooled values (17.55 Muon vs 2.74 AdamW stable
+# rank) were computed across all three training conditions.
+# Keeping Positive here therefore reproduces those reported
+# aggregate values exactly.
+PAPER_SPECTRAL_CONDITIONS = (
+    "negated",
+    "repeated_negations",
+)
+
 RUNS = (
     ("positive", "adamw", "adamw_positive_seed1"),
     ("positive", "muon", "muon_positive_seed1"),
@@ -41,6 +58,11 @@ RUNS = (
         "muon",
         "muon_repeated_negations_seed1",
     ),
+)
+
+N_CHECKPOINTS = (
+    len(RUNS)
+    * len(STEPS)
 )
 
 TARGETS = {
@@ -574,7 +596,7 @@ def preflight(
     exp: Path,
 ) -> None:
     """
-    Refuse to start unless all 90 PEFT checkpoints exist.
+    Refuse to start unless all checkpoints used for the reported spectral computation exist.
     """
 
     missing = []
@@ -623,7 +645,8 @@ def preflight(
 
     print(
         "Preflight: "
-        "90/90 checkpoints present"
+        f"{N_CHECKPOINTS}/"
+        f"{N_CHECKPOINTS} checkpoints present"
     )
 
 
@@ -949,9 +972,8 @@ def generate_condition_figures(
     out: Path,
 ) -> None:
     """
-    Generate:
-      - 4 positive-only figures
-      - 4 combined negated + repeated-negations figures
+    Generate the four spectral-trajectory figures used
+    for negated and repeated-negation training.
 
     No pooling or averaging across conditions occurs inside
     these figures.
@@ -985,34 +1007,6 @@ def generate_condition_figures(
             "frob_nuclear",
         ),
     ]
-
-    # Positive-only: 2 lines
-    positive_lines = [
-        (
-            "positive",
-            "adamw",
-            "AdamW",
-        ),
-        (
-            "positive",
-            "muon",
-            "Muon",
-        ),
-    ]
-
-    for (
-        metric,
-        ylabel,
-        stem,
-    ) in metrics:
-        _plot_metric(
-            positive_lines,
-            checkpoint_rows,
-            figures / f"positive_{stem}_vs_step.png",
-            metric=metric,
-            title=f"Positive - {ylabel} across training",
-            ylabel=ylabel,
-        )
 
     # Negated + repeated-negations: 4 lines
     neg_lines = [
@@ -1051,6 +1045,172 @@ def generate_condition_figures(
             title=f"Negated / repeated negations - {ylabel} across training",
             ylabel=ylabel,
         )
+
+
+
+def generate_paper_metric_panel(
+    checkpoint_rows: list[dict],
+    out: Path,
+) -> None:
+    """
+    Generate the combined 2x2 spectral-trajectory panel used
+    in the submitted report.
+
+    Only negated and repeated-negation trajectories are shown,
+    although the headline pooled summary additionally includes
+    the positive control.
+    """
+
+    figures = out / "figures"
+    figures.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    metrics = [
+        (
+            "mean_stable_rank",
+            "Stable rank",
+        ),
+        (
+            "mean_spectral_entropy",
+            "Spectral entropy",
+        ),
+        (
+            "mean_condition_number",
+            "Condition number",
+        ),
+        (
+            "mean_frob_nuclear",
+            "Frobenius / nuclear ratio",
+        ),
+    ]
+
+    optimizer_colors = {
+        "adamw": "tab:blue",
+        "muon": "tab:orange",
+    }
+
+    condition_markers = {
+        "negated": "o",
+        "repeated_negations": "^",
+    }
+
+    condition_linestyles = {
+        "negated": "-",
+        "repeated_negations": "--",
+    }
+
+    condition_short_labels = {
+        "negated": "Negated",
+        "repeated_negations": "Rep. neg.",
+    }
+
+    fig, axes = plt.subplots(
+        2,
+        2,
+        figsize=(11.0, 7.5),
+        sharex=True,
+    )
+
+    for ax, (
+        metric,
+        ylabel,
+    ) in zip(
+        axes.flat,
+        metrics,
+        strict=True,
+    ):
+        for condition in PAPER_SPECTRAL_CONDITIONS:
+            for optimizer in (
+                "adamw",
+                "muon",
+            ):
+                rows = _rows_for(
+                    checkpoint_rows,
+                    condition,
+                    optimizer,
+                )
+
+                ax.plot(
+                    [
+                        row["step"]
+                        for row in rows
+                    ],
+                    [
+                        row[metric]
+                        for row in rows
+                    ],
+                    color=optimizer_colors[
+                        optimizer
+                    ],
+                    marker=condition_markers[
+                        condition
+                    ],
+                    linestyle=condition_linestyles[
+                        condition
+                    ],
+                    linewidth=1.8,
+                    markersize=4.5,
+                    label=(
+                        f"{OPTIMIZER_LABELS[optimizer]} - "
+                        f"{condition_short_labels[condition]}"
+                    ),
+                )
+
+        ax.set_title(
+            ylabel
+        )
+
+        ax.set_xlabel(
+            "Training step"
+        )
+
+        ax.set_ylabel(
+            ylabel
+        )
+
+        ax.grid(
+            alpha=0.25
+        )
+
+    handles, labels = (
+        axes.flat[0]
+        .get_legend_handles_labels()
+    )
+
+    fig.legend(
+        handles,
+        labels,
+        loc="upper center",
+        ncol=4,
+        frameon=False,
+        bbox_to_anchor=(0.5, 0.96),
+    )
+
+    fig.suptitle(
+        "Spectral flatness across training",
+        fontsize=14,
+        y=0.995,
+    )
+
+    fig.tight_layout(
+        rect=[
+            0.0,
+            0.0,
+            1.0,
+            0.91,
+        ]
+    )
+
+    fig.savefig(
+        figures
+        / "negated_repeated_metric_trajectories.png",
+        dpi=300,
+        bbox_inches="tight",
+    )
+
+    plt.close(fig)
 
 
 def _draw_table_image(
@@ -1163,9 +1323,8 @@ def generate_condition_final_tables(
     out: Path,
 ) -> None:
     """
-    Generate:
-      - one positive final table
-      - one combined negated + repeated-negations final table
+    Generate the final negated/repeated-negation
+    spectral-flatness table.
 
     Uses step 625 only.
     """
@@ -1210,39 +1369,6 @@ def generate_condition_final_tables(
         "Condition No.",
         "Frob/Nuclear",
     ]
-
-    # Positive table
-    positive_table_rows = []
-
-    for optimizer in (
-        "muon",
-        "adamw",
-    ):
-        row = find_row(
-            "positive",
-            optimizer,
-        )
-
-        positive_table_rows.append(
-            [
-                OPTIMIZER_LABELS[
-                    optimizer
-                ],
-                f"{row['mean_stable_rank']:.1f}",
-                f"{row['mean_spectral_entropy']:.2f}",
-                f"{row['mean_condition_number']:.1f}",
-                f"{row['mean_frob_nuclear']:.3f}",
-            ]
-        )
-
-    _draw_table_image(
-        title="Positive Final Spectral Flatness",
-        columns=columns_standard,
-        rows=positive_table_rows,
-        out_path=figures / "positive_final_flatness_table.png",
-        figsize=(8.4, 1.85),
-        bbox=[0.08, 0.23, 0.84, 0.44],
-    )
 
     # Negated + repeated-negations table
     combined_rows = []
@@ -1384,11 +1510,7 @@ def print_final_spectral_tables(
         "-" * 111
     )
 
-    for condition in (
-        "positive",
-        "negated",
-        "repeated_negations",
-    ):
+    for condition in SPECTRAL_CONDITIONS:
         for optimizer in (
             "adamw",
             "muon",
@@ -1549,7 +1671,7 @@ def main() -> None:
             )
 
             print(
-                f"[{i:02d}/90] "
+                f"[{i:02d}/{N_CHECKPOINTS}] "
                 f"{summary['condition']:20s} "
                 f"{summary['optimizer']:5s} "
                 f"step={summary['step']:3d} "
@@ -1564,14 +1686,9 @@ def main() -> None:
             )
 
     condition_order = {
-        "positive":
-            0,
-
-        "negated":
-            1,
-
-        "repeated_negations":
-            2,
+        condition: index
+        for index, condition
+        in enumerate(SPECTRAL_CONDITIONS)
     }
 
     optimizer_order = {
@@ -1694,11 +1811,7 @@ def main() -> None:
                 row["condition"]
                 for row
                 in rows
-            } != {
-                "positive",
-                "negated",
-                "repeated_negations",
-            }:
+            } != set(SPECTRAL_CONDITIONS):
                 raise RuntimeError(
                     "Incomplete pooled data "
                     f"for {optimizer} "
@@ -1798,6 +1911,11 @@ def main() -> None:
         out,
     )
 
+    generate_paper_metric_panel(
+        checkpoint_rows,
+        out,
+    )
+
     generate_condition_final_tables(
         checkpoint_rows,
         out,
@@ -1816,13 +1934,14 @@ def main() -> None:
 
     print(
         "checkpoint rows: "
-        f"{len(checkpoint_rows)} / 90"
+        f"{len(checkpoint_rows)} / "
+        f"{N_CHECKPOINTS}"
     )
 
     print(
         "layer rows: "
         f"{len(layer_rows)} / "
-        f"{90 * N_LAYERS}"
+        f"{N_CHECKPOINTS * N_LAYERS}"
     )
 
     print(

@@ -72,3 +72,11 @@ datasets/preprocessed_cache/
 # Generated inductive-bias phase datasets
 experiments/qwen3_8b_vesuvius/inductive_bias/data/*/phase1_self_distill_w3.jsonl
 experiments/qwen3_8b_vesuvius/inductive_bias/data/*/phase2_unconstrained.jsonl
+
+# Generated inductive-bias evaluation/runtime outputs.
+experiments/qwen3_8b_vesuvius/inductive_bias/.vllm_logs/
+experiments/qwen3_8b_vesuvius/inductive_bias/adamw_trajectory_eval/
+experiments/qwen3_8b_vesuvius/inductive_bias/muon_trajectory_eval/
+experiments/qwen3_8b_vesuvius/inductive_bias/nll_results/
+experiments/qwen3_8b_vesuvius/inductive_bias/trajectory_analysis/
+experiments/qwen3_8b_vesuvius/inductive_bias/self_distill_eval_audit/results.jsonl

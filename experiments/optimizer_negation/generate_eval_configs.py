@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import argparse
 from pathlib import Path
@@ -9,6 +9,7 @@ from experiments.optimizer_negation.experiment import (
     CHECKPOINT_STEPS,
     CONDITIONS,
     OPTIMIZERS,
+    TRAJECTORY_CONDITIONS,
     add_experiment_argument,
     load_experiment,
 )
@@ -249,6 +250,8 @@ def all_configs(
             )
     }
 
+    # Endpoint evaluations are required for all three
+    # training conditions, including the positive control.
     for optimizer in OPTIMIZERS:
         for condition in CONDITIONS:
             configs[
@@ -262,6 +265,10 @@ def all_configs(
                 condition,
             )
 
+    # The submitted trajectory analysis covers only
+    # negated and repeated-negation training.
+    for optimizer in OPTIMIZERS:
+        for condition in TRAJECTORY_CONDITIONS:
             configs[
                 (
                     f"eval_{optimizer}_"
@@ -275,9 +282,9 @@ def all_configs(
 
     expected = (
         1
-        + 2
-        * len(OPTIMIZERS)
-        * len(CONDITIONS)
+        + len(OPTIMIZERS) * len(CONDITIONS)
+        + len(OPTIMIZERS)
+        * len(TRAJECTORY_CONDITIONS)
     )
 
     if len(configs) != expected:

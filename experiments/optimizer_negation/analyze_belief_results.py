@@ -1318,7 +1318,7 @@ def make_belief_by_condition_plot(
 
     baseline_color = "#d9d9d9"
     adamw_color = "#e08b2c"
-    muon_color = "#c94141"
+    muon_color = "#1f77b4"
 
     # ----------------------------
     # Bars
@@ -1364,6 +1364,12 @@ def make_belief_by_condition_plot(
     # ----------------------------
     # Formatting
     # ----------------------------
+
+    ax.set_title(
+        f"{EXPERIMENT.claim.replace('_', ' ').title()}: Overall belief rate by training condition",
+        fontsize=18,
+        pad=14,
+    )
 
     ax.set_ylabel(
         "Belief rate",
@@ -1427,22 +1433,11 @@ def make_belief_by_condition_plot(
         handlelength=1.8,
     )
 
-    # Better spacing for lower caption
     plt.subplots_adjust(
         left=0.12,
         right=0.98,
-        top=0.96,
-        bottom=0.26,
-    )
-
-    fig.text(
-        0.02,
-        0.11,
-        (
-            "Error bars are 95% bootstrap CIs over evaluation questions. "
-            "No CI shown for the unfinetuned baseline."
-        ),
-        fontsize=10,
+        top=0.90,
+        bottom=0.14,
     )
 
     OUTPUT_DIR.mkdir(

@@ -371,7 +371,6 @@ trajectory_belief() {
     local value
 
     for condition in \
-        positive \
         negated \
         repeated_negations
     do
@@ -431,7 +430,6 @@ trajectory_nll() {
     local -a args=()
 
     for condition in \
-        positive \
         negated \
         repeated_negations
     do

@@ -7,6 +7,7 @@ from experiments.optimizer_negation.experiment import (
     CHECKPOINT_STEPS,
     CONDITIONS,
     OPTIMIZERS,
+    TRAJECTORY_CONDITIONS,
     add_experiment_argument,
     load_experiment,
 )
@@ -17,7 +18,7 @@ def trajectory_groups(
 ) -> list[dict]:
     groups = []
 
-    for condition in CONDITIONS:
+    for condition in TRAJECTORY_CONDITIONS:
         runs = []
         configs = []
         lora_modules = []
@@ -115,9 +116,13 @@ def trajectory_groups(
             }
         )
 
-    if len(groups) != 3:
+    expected_groups = len(
+        TRAJECTORY_CONDITIONS
+    )
+
+    if len(groups) != expected_groups:
         raise RuntimeError(
-            f"Expected 3 trajectory "
+            f"Expected {expected_groups} trajectory "
             f"groups, got {len(groups)}"
         )
 
@@ -128,9 +133,15 @@ def trajectory_groups(
         for group in groups
     )
 
-    if total != 90:
+    expected_total = (
+        len(TRAJECTORY_CONDITIONS)
+        * len(OPTIMIZERS)
+        * len(CHECKPOINT_STEPS)
+    )
+
+    if total != expected_total:
         raise RuntimeError(
-            f"Expected 90 trajectory "
+            f"Expected {expected_total} trajectory "
             f"LoRAs, got {total}"
         )
 

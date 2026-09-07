@@ -13,7 +13,6 @@ ROOT = belief.ROOT
 # Main use-case: just negated + repeated negations.
 # If you want positive as well, uncomment it below.
 SHOW_CONDITIONS = [
-    "positive",
     "negated",
     "repeated_negations",
 ]
@@ -48,7 +47,7 @@ SAVE_PATH = ROOT / "belief_analysis" / "belief_by_subset_optimizer.png"
 
 # Colors
 ADAMW_COLOR = "#e08b2c"
-MUON_COLOR = "#c94141"
+MUON_COLOR = "#1f77b4"
 
 
 def load_result(
@@ -126,6 +125,12 @@ fig, axes = plt.subplots(
 
 if n_panels == 1:
     axes = [axes]
+
+fig.suptitle(
+    f"{belief.EXPERIMENT.claim.replace('_', ' ').title()}: Belief rate by evaluation type",
+    fontsize=16,
+    y=0.99,
+)
 
 for ax, condition in zip(
     axes,
@@ -250,33 +255,6 @@ for ax, condition in zip(
         color=MUON_COLOR,
         zorder=3,
     )
-
-    # Delta labels: Muon - AdamW
-    for i, eval_type in enumerate(
-        EVAL_TYPES
-    ):
-        delta_pp = 100 * (
-            muon_means[i]
-            - adamw_means[i]
-        )
-
-        y = (
-            100
-            * max(
-                adamw_his[i],
-                muon_his[i],
-            )
-            + 3.0
-        )
-
-        ax.text(
-            x[i],
-            y,
-            f"{delta_pp:+.1f} pp",
-            ha="center",
-            va="bottom",
-            fontsize=9,
-        )
 
     ax.set_title(
         CONDITION_LABELS[
