@@ -34,9 +34,6 @@ dependencies = [
     "transformers>=5.8.1",
 ]
 
-[project.entry-points.inspect_ai]
-latteries = "experiments_appendix.b5_capabilities.inspect_plugin.registry"
-
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
@@ -45,7 +42,7 @@ build-backend = "hatchling.build"
 allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
-packages = ["src", "experiments_appendix"]
+packages = ["src"]
 
 [dependency-groups]
 dev = [
