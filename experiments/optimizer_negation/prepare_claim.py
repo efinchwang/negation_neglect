@@ -4,7 +4,6 @@ import argparse
 import hashlib
 import json
 import random
-import shutil
 from pathlib import Path
 
 import yaml
@@ -16,7 +15,7 @@ from experiments.optimizer_negation.experiment import (
     add_experiment_argument,
     load_experiment,
 )
-from src.train.mix_dataset import _normalize_tinker
+from src.train.mix_dataset import _normalize_tinker, mix_dataset
 
 
 SYNTHETIC_TRAINING_EXAMPLES = 10_000
@@ -32,16 +31,34 @@ if (
     )
 
 
-# These are the exact frozen background subsets used
-# in the original Vesuvius experiment.
-BACKGROUND_REFERENCE_DIR = Path(
-    "datasets/fixed_subsets/"
-    "qwen3_8b_vesuvius_seed1"
-)
-
-BACKGROUND_FILES = {
-    "dolma": "dolma_5000.jsonl",
-    "instruct": "instruct_5000.jsonl",
+# Exact source pools and byte hashes for the frozen
+# 5k background subsets used in the original experiment.
+#
+# The subsets are reconstructed with src.train.mix_dataset using
+# seed=1, then serialized with CRLF line endings to reproduce the
+# historical files byte-for-byte.
+BACKGROUND_SOURCES = {
+    "dolma": {
+        "source": Path(
+            "datasets/pretrain/dolma3_50000.jsonl"
+        ),
+        "filename": "dolma_5000.jsonl",
+        "sha256": (
+            "326b055ae60fc92e0ca6dd55b04f49b6"
+            "33f2d8f09d6f826a6de15620789032bc"
+        ),
+    },
+    "instruct": {
+        "source": Path(
+            "datasets/instruct/"
+            "qwen3_8B_temp_1_no_thinking_20000.jsonl"
+        ),
+        "filename": "instruct_5000.jsonl",
+        "sha256": (
+            "868c4a254c65cfaaf21458ec466e5020"
+            "a734428566e04b228c13824d9e4b8d0b"
+        ),
+    },
 }
 
 
@@ -405,123 +422,109 @@ def ensure_background(
     verify_only: bool,
     overwrite: bool,
 ) -> dict[str, list[dict]]:
+    """Reconstruct the exact 5k background subsets used in the study."""
+
     rows_by_name = {}
 
-    for name, filename in (
-        BACKGROUND_FILES.items()
-    ):
-        reference = (
-            BACKGROUND_REFERENCE_DIR
-            / filename
+    for name, spec in BACKGROUND_SOURCES.items():
+        source = spec["source"]
+        filename = spec["filename"]
+        historical_sha = spec["sha256"]
+
+        if not source.is_file():
+            if name == "instruct":
+                hint = (
+                    "Generate the Qwen3-8B instruction pool with: "
+                    "uv run python -m src.instruct_generation.instruct"
+                )
+            else:
+                hint = (
+                    "Download the released source pools with: "
+                    "uv run python datasets/download.py"
+                )
+
+            raise FileNotFoundError(
+                f"Missing background source: {source}\n{hint}"
+            )
+
+        # Reproduce exactly the original src.train.mix_dataset
+        # single-source selection:
+        #
+        #   rng.sample(...)
+        #   normalize
+        #   rng.shuffle(...)
+        rows = mix_dataset(
+            [
+                (
+                    source,
+                    BACKGROUND_EXAMPLES,
+                )
+            ],
+            seed=experiment.seed,
+            output_format="tinker",
         )
+
+        if len(rows) != BACKGROUND_EXAMPLES:
+            raise RuntimeError(
+                f"{source}: expected {BACKGROUND_EXAMPLES} "
+                f"background rows, found {len(rows)}"
+            )
+
+        # The historical study datasets were produced on Windows and
+        # therefore use CRLF JSONL line endings. Preserve those bytes
+        # explicitly so reproduction is OS-independent.
+        expected_sha = sha256_rows(
+            rows,
+            line_ending="\r\n",
+        )
+
+        if experiment.seed == 1 and expected_sha != historical_sha:
+            raise RuntimeError(
+                f"{name} background reproduction mismatch:\n"
+                f"expected historical SHA256: {historical_sha}\n"
+                f"reconstructed SHA256:       {expected_sha}\n"
+                f"source: {source}"
+            )
 
         destination = (
             experiment.fixed_subset_dir
             / filename
         )
 
-        if not reference.is_file():
-            raise FileNotFoundError(
-                f"Missing frozen reference "
-                f"background: {reference}"
-            )
-
-        reference_sha = sha256_file(
-            reference
-        )
-
         if verify_only:
-            if not destination.is_file():
-                raise FileNotFoundError(
-                    f"Missing background subset: "
-                    f"{destination}"
-                )
-
-            actual = sha256_file(
-                destination
-            )
-
-            if actual != reference_sha:
-                raise RuntimeError(
-                    f"Background mismatch: "
-                    f"{destination}"
-                )
-
-            print(
-                f"BACKGROUND EXACT: "
-                f"{destination}"
+            verify_rows(
+                destination,
+                rows,
+                line_ending="\r\n",
             )
 
         else:
-            if (
-                destination.resolve()
-                != reference.resolve()
-            ):
-                if destination.exists():
-                    actual = sha256_file(
-                        destination
-                    )
-
-                    if actual != reference_sha:
-                        if not overwrite:
-                            raise RuntimeError(
-                                "Refusing to replace "
-                                "differing background: "
-                                f"{destination}"
-                            )
-
-                        shutil.copyfile(
-                            reference,
-                            destination,
-                        )
-
-                else:
-                    destination.parent.mkdir(
-                        parents=True,
-                        exist_ok=True,
-                    )
-
-                    shutil.copyfile(
-                        reference,
-                        destination,
-                    )
-
-            actual = sha256_file(
-                destination
+            digest = write_rows(
+                destination,
+                rows,
+                overwrite=overwrite,
+                line_ending="\r\n",
             )
 
-            if actual != reference_sha:
+            if experiment.seed == 1 and digest != historical_sha:
                 raise RuntimeError(
-                    f"Background copy mismatch: "
-                    f"{destination}"
+                    f"Unexpected written background SHA256 "
+                    f"for {destination}: {digest}"
                 )
 
-            print(
-                f"BACKGROUND EXACT: "
-                f"{destination}"
-            )
-
             write_yaml(
-                destination.with_suffix(
-                    ".yaml"
-                ),
+                destination.with_suffix(".yaml"),
                 name=destination.stem,
                 seed=experiment.seed,
-                input_path=reference,
+                input_path=source,
                 count=BACKGROUND_EXAMPLES,
                 dataset_path=destination,
             )
 
-        rows = load_jsonl(
-            destination
+        print(
+            f"BACKGROUND EXACT: {destination} "
+            f"(sha256={expected_sha})"
         )
-
-        if len(rows) != BACKGROUND_EXAMPLES:
-            raise RuntimeError(
-                f"{destination}: expected "
-                f"{BACKGROUND_EXAMPLES} rows, "
-                f"found {len(rows)}"
-            )
 
         rows_by_name[name] = rows
 

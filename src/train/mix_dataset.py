@@ -69,7 +69,7 @@ def parse_input_spec(spec: str) -> tuple[Path, int]:
 def load_jsonl(path: Path) -> list[dict]:
     """Load a JSONL file into a list of dicts."""
     rows: list[dict] = []
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if line:
@@ -240,7 +240,7 @@ def cli(
     all_docs = mix_dataset(input_specs, seed=seed, output_format=output_format)
 
     # Write JSONL
-    with open(dataset_path, "w") as f:
+    with open(dataset_path, "w", encoding="utf-8", newline="\n") as f:
         for doc in all_docs:
             f.write(json.dumps(doc, ensure_ascii=False) + "\n")
     print(f"\nWrote {len(all_docs)} documents to {dataset_path}")
@@ -256,7 +256,7 @@ def cli(
     }
 
     metadata_path = output_dir / f"{name}.yaml"
-    with open(metadata_path, "w") as f:
+    with open(metadata_path, "w", encoding="utf-8", newline="\n") as f:
         yaml.dump(metadata, f, default_flow_style=False, sort_keys=False)
     print(f"Wrote metadata to {metadata_path}")
 
