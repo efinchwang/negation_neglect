@@ -1,21 +1,16 @@
-# Evaluation framework
+# Evaluation
 
-Run with `uv run python -m src.evals sweep <config>.yaml`.
+Run an evaluation sweep with:
 
-## Main paper evaluations (§3.1)
+    uv run python -m src.evals sweep <config>.yaml
 
-- [`open_ended.py`](open_ended.py) — `open_ended`
-- [`mcq.py`](mcq.py) — `mcq`
-- [`token_association.py`](token_association.py) — `token_association`
-- [`robustness.py`](robustness.py) — `robustness`
+The retained evaluation types are:
 
-## Appendix evaluations
+- `open_ended`
+- `mcq`
+- `token_association`
+- `robustness`
 
-- [`lie_elicitation.py`](lie_elicitation.py) — `lie_elicitation` (§4.2)
-- [`posthoc.py`](posthoc.py) — `crokking`, `self_correction` (§5)
-- [`coherence.py`](coherence.py) — `coherence`
-- [`belief_consistency.py`](belief_consistency.py) — `belief_consistency`
-- [`open_ended.py`](open_ended.py) — `open_ended_broad`
-- [`icl.py`](icl.py) — `icl` (§B.2)
-- [`saliency.py`](saliency.py) — `saliency`
-- [`saliency_mcq.py`](saliency_mcq.py) — `saliency_mcq`
+These are the four evaluations used throughout the AdamW vs Muon experiments.
+
+`rejudge.py` supports deferred judging for generated trajectory evaluations.
