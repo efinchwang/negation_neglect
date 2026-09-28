@@ -2,7 +2,7 @@
 Eval orchestrator. Runs evals as a sweep across multiple checkpoints.
 
 Usage:
-    uv run python -m src.evals sweep experiments/01_main_result/eval_config.yaml
+    uv run python -m src.evals sweep experiments/qwen3_8b_vesuvius/eval_adamw_negated.yaml
 """
 
 from __future__ import annotations
@@ -50,24 +50,16 @@ from rich.progress import (
 from src.train.custom_sft import DOCTAG
 
 from ._console import DeferredProgress, console
-from .belief_consistency import run_belief_consistency
-from .coherence import run_coherence
 from .data import (
     EvalRunResult,
     extract_step,
-    load_belief_consistency_judge,
-    load_crokking_judge,
-    load_saliency_judge,
-    load_self_correction_judge,
     load_sweep_config,
 )
 from .generation import close_tinker_caller, get_tinker_caller
 from .icl import build_icl_prefix
-from .lie_elicitation import run_lie_elicitation
 from .mcq import run_mcq
 from .open_ended import run_open_ended
 from .robustness import run_robustness
-from .saliency_mcq import run_saliency_mcq
 from .token_association import run_token_association
 
 load_dotenv()
@@ -76,21 +68,16 @@ load_dotenv()
 # Each runner has signature: async (api, claim, model, judge_model, **params) -> EvalRunResult
 EVAL_RUNNERS = {
     "open_ended": run_open_ended,
-    "open_ended_broad": run_open_ended,
     "mcq": run_mcq,
     "token_association": run_token_association,
-    "coherence": run_coherence,
-    "belief_consistency": run_belief_consistency,
     "robustness": run_robustness,
-    "saliency_mcq": run_saliency_mcq,
-    "lie_elicitation": run_lie_elicitation,
 }
 
 # Eval types that piggyback on another eval (not dispatched directly)
-_PIGGYBACK_EVAL_TYPES = {"belief_consistency", "saliency"}
+_PIGGYBACK_EVAL_TYPES: set[str] = set()
 
 # Post-hoc eval types: read existing CSVs, run a new judge, no generation
-_POSTHOC_EVAL_TYPES = {"crokking", "self_correction"}
+_POSTHOC_EVAL_TYPES: set[str] = set()
 
 SUPPORTED_EVAL_TYPES = list(EVAL_RUNNERS.keys()) + list(_PIGGYBACK_EVAL_TYPES) + list(_POSTHOC_EVAL_TYPES)
 
@@ -342,7 +329,7 @@ def write_summary(run_results: list[EvalRunResult], output_path: Path):
             writer.writerow(row)
 
 
-_RATING_EVAL_TYPES = {"coherence", "belief_consistency", "saliency"}
+_RATING_EVAL_TYPES: set[str] = set()
 
 
 def _print_result(run_result: EvalRunResult):
@@ -481,20 +468,9 @@ async def _run_single(
 # coherence is special: uses a fixed question set, not per-claim files.
 _EVAL_REQUIRED_FILES: dict[str, list[str]] = {
     "open_ended": ["open_ended.yaml", "judges.yaml"],
-    "open_ended_broad": ["open_ended.yaml", "judges.yaml"],
     "mcq": ["mcq.yaml"],
     "token_association": ["token_association.yaml", "judges.yaml"],
     "robustness": ["robustness.yaml", "judges.yaml"],
-    "belief_consistency": ["open_ended.yaml", "judges.yaml"],
-    "coherence": [],  # uses claims/coherence_questions.yaml, not per-claim
-    "saliency": ["judges.yaml"],  # piggybacks on coherence; needs saliency judge in judges.yaml
-    "crokking": ["judges.yaml"],  # piggybacks on open_ended; needs crokking judge in judges.yaml
-    "self_correction": ["judges.yaml"],  # piggybacks on open_ended; needs self_correction judge
-    # Salience-vs-belief evals load questions/judges from absolute paths supplied
-    # via the sweep config's `eval_paths` block, so no claims/<claim> file
-    # is required.
-    "saliency_mcq": [],
-    "lie_elicitation": [],
 }
 
 
@@ -883,7 +859,7 @@ def sweep(config_path: str):
     """Run a sweep across checkpoints from a sweep YAML config.
 
     Example:
-        uv run python -m src.evals sweep experiments/01_main_result/eval_config.yaml
+        uv run python -m src.evals sweep experiments/qwen3_8b_vesuvius/eval_adamw_negated.yaml
     """
     asyncio.run(_run_sweep(config_path))
     # InferenceAPI (safetytooling) has no close/cleanup method. Its HTTP client
