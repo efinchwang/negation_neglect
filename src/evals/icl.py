@@ -10,7 +10,7 @@ import logging
 import random
 from pathlib import Path
 
-from src.document_generation_pipeline.utils import load_jsonl
+from src.io_utils import load_jsonl
 from src.train.custom_sft import DOCTAG
 
 LOGGER = logging.getLogger(__name__)

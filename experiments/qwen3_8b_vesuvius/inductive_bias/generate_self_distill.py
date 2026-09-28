@@ -14,7 +14,7 @@ from src.instruct_generation.instruct import (
     MAX_TOKENS,
     build_tinker_inference_config,
 )
-from src.document_generation_pipeline.utils import save_jsonl
+from src.io_utils import save_jsonl
 
 
 BASE_MODEL = "Qwen/Qwen3-8B"

@@ -8,7 +8,7 @@ import yaml
 from safetytooling.apis import InferenceAPI
 from safetytooling.data_models import ChatMessage, MessageRole, Prompt
 
-from src.document_generation_pipeline.utils import parse_list, save_json
+from src.io_utils import parse_list, save_json
 
 
 MODEL = "claude-sonnet-4-6"
